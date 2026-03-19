@@ -4,6 +4,7 @@ export interface Message {
   sender: "user" | "ai";
   timestamp: Date;
   starred: boolean;
+  isError?: boolean;
 }
 
 export type FilterTag = {

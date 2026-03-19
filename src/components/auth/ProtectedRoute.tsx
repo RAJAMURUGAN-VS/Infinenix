@@ -1,18 +1,15 @@
 // components/auth/ProtectedRoute.tsx
+// AUTH DISABLED — remove the early return below to re-enable auth
 import React, { ReactNode } from 'react';
-import { useAuth } from '../../contexts/AuthContext';
-import { AuthPage } from '../../pages/AuthPage';
 
 interface ProtectedRouteProps {
   children: ReactNode;
 }
 
 export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
-  const { isAuthenticated } = useAuth();
-  
-  if (!isAuthenticated) {
-    return <AuthPage />;
-  }
-  
+  // To re-enable auth, uncomment:
+  // const { isAuthenticated } = useAuth();
+  // if (!isAuthenticated) return <AuthPage />;
+
   return <>{children}</>;
 };

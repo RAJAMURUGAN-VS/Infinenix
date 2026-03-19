@@ -1,5 +1,5 @@
 // hooks/useChatLogic.ts
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Message } from "@/types/chat";
 import { ApiService, IntentResult } from "@/services/apiService";
 import { CharacterService } from "../services/characterService";
@@ -23,76 +23,78 @@ export interface ParsedAIResponse {
   code: string;
 }
 
+// --- localStorage helpers ---
+
+const saveChatToStorage = (chatId: string, messages: Message[], folderId: string) => {
+  try {
+    localStorage.setItem(`chat_${chatId}`, JSON.stringify({ messages, folderId }));
+  } catch (e) {
+    console.warn("Failed to save chat to localStorage:", e);
+  }
+};
+
+const loadChatFromStorage = (chatId: string): { messages: Message[]; folderId: string } => {
+  try {
+    const raw = localStorage.getItem(`chat_${chatId}`);
+    if (!raw) return { messages: [], folderId: "default" };
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return { messages: parsed, folderId: "default" };
+    if (parsed.messages) return { messages: parsed.messages, folderId: parsed.folderId || "default" };
+  } catch {
+    // Corrupt data — ignore
+  }
+  return { messages: [], folderId: "default" };
+};
+
+// --- Hook ---
+
 export const useChatLogic = () => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [chatLoading, setChatLoading] = useState(false);
   const [characterData, setCharacterData] = useState<CharacterData | null>(null);
   const [currentlyPlaying, setCurrentlyPlaying] = useState<string | null>(null);
   const [currentChatId, setCurrentChatId] = useState<string>(() => {
-    return localStorage.getItem('currentChatId') || Date.now().toString();
+    try {
+      return localStorage.getItem("currentChatId") || Date.now().toString();
+    } catch {
+      return Date.now().toString();
+    }
   });
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // Load character data on mount
   useEffect(() => {
     const character = CharacterService.getEngagedCharacter();
-    if (character) {
-      setCharacterData(character);
-    }
+    if (character) setCharacterData(character);
   }, []);
 
-  // Helper function to get active folder ID
-  const getActiveFolderId = () => {
-    return localStorage.getItem('activeFolderId') || 'default';
-  };
-
-  // Helper function to save chat with folder info
-  const saveChatWithFolder = (chatId: string, chatMessages: Message[], folderId?: string) => {
-    const targetFolderId = folderId || getActiveFolderId();
-    const chatData = {
-      messages: chatMessages,
-      folderId: targetFolderId
-    };
-    localStorage.setItem(`chat_${chatId}`, JSON.stringify(chatData));
-  };
-
-  // Helper function to load chat data
-  const loadChatData = (chatId: string) => {
-    const savedData = localStorage.getItem(`chat_${chatId}`);
-    if (savedData) {
-      const parsed = JSON.parse(savedData);
-      // Handle both old format (just messages array) and new format (with folder info)
-      if (Array.isArray(parsed)) {
-        // Old format - just messages
-        return { messages: parsed, folderId: 'default' };
-      } else if (parsed.messages) {
-        // New format - with folder info
-        return { messages: parsed.messages, folderId: parsed.folderId || 'default' };
-      }
-    }
-    return { messages: [], folderId: 'default' };
-  };
-
-  // Load messages for current chat
+  // Load messages when chat ID changes (with skeleton delay)
   useEffect(() => {
-    const { messages: loadedMessages } = loadChatData(currentChatId);
-    setMessages(loadedMessages);
+    setChatLoading(true);
+    const { messages: loaded } = loadChatFromStorage(currentChatId);
+    const delay = loaded.length > 0 ? 150 : 0;
+    const timer = setTimeout(() => {
+      setMessages(loaded);
+      setChatLoading(false);
+    }, delay);
+    return () => clearTimeout(timer);
   }, [currentChatId]);
 
-  // Save messages whenever they change
+  // Persist messages to localStorage whenever they change
   useEffect(() => {
-    if (messages.length > 0) {
-      // Check if this is a new chat that should be saved to a specific folder
-      const newChatFolderId = localStorage.getItem('newChatFolderId');
+    if (messages.length === 0) return;
+    try {
+      const newChatFolderId = localStorage.getItem("newChatFolderId");
       if (newChatFolderId) {
-        // Save to the designated folder and clear the designation
-        saveChatWithFolder(currentChatId, messages, newChatFolderId);
-        localStorage.removeItem('newChatFolderId');
+        saveChatToStorage(currentChatId, messages, newChatFolderId);
+        localStorage.removeItem("newChatFolderId");
       } else {
-        // Save to current active folder or maintain existing folder
-        const existingData = loadChatData(currentChatId);
-        saveChatWithFolder(currentChatId, messages, existingData.folderId);
+        const { folderId } = loadChatFromStorage(currentChatId);
+        saveChatToStorage(currentChatId, messages, folderId);
       }
+    } catch (e) {
+      console.warn("Failed to persist messages:", e);
     }
   }, [messages, currentChatId]);
 
@@ -104,8 +106,7 @@ export const useChatLogic = () => {
       const jsonStart = rawContent.indexOf("{");
       const jsonString = jsonStart >= 0 ? rawContent.slice(jsonStart) : rawContent;
       return JSON.parse(jsonString);
-    } catch (err) {
-      console.warn("Failed to parse AI response as JSON, using raw content.", err);
+    } catch {
       return { response: rawContent, code: "" };
     }
   };
@@ -113,29 +114,27 @@ export const useChatLogic = () => {
   /**
    * Handles the complete message sending flow
    */
-  const handleSendMessage = async (content: string) => {
+  const handleSendMessage = useCallback(async (content: string) => {
     if (!content.trim()) {
-      toast.error('Please enter a message');
+      toast.error("Please enter a message");
       return;
     }
 
-    const newMessage: Message = {
+    const userMessage: Message = {
       id: `${currentChatId}-${Date.now()}`,
       content,
       sender: "user",
       timestamp: new Date(),
-      starred: false
+      starred: false,
     };
 
-    setMessages(prev => [...prev, newMessage]);
+    setMessages((prev) => [...prev, userMessage]);
     setIsLoading(true);
 
     try {
-      // Classify intent
       const intent = await ApiService.classifyIntent(content);
       const threshold = 0.3;
 
-      // Determine system prompt based on intent
       let systemPrompt: string;
       let shouldShowIntentToast = false;
 
@@ -146,11 +145,9 @@ export const useChatLogic = () => {
         systemPrompt = PromptService.createCasualSystemPrompt(characterData);
       }
 
-      // Get AI response
       const aiRawContent = await ApiService.getSonarResponse(content, systemPrompt);
       const aiParsed = parseAIResponse(aiRawContent);
 
-      // Create AI message
       const aiMessage: Message = {
         id: `${currentChatId}-${Date.now() + 1}`,
         content:
@@ -158,88 +155,97 @@ export const useChatLogic = () => {
           (aiParsed.code ? `\n\n### Render Code Below ###\n${aiParsed.code}` : ""),
         sender: "ai",
         timestamp: new Date(),
-        starred: false
+        starred: false,
       };
 
-      setMessages(prev => [...prev, aiMessage]);
+      setMessages((prev) => [...prev, aiMessage]);
 
-      // Show intent detection toast if applicable
       if (shouldShowIntentToast) {
         toast.success(
           `🎯 Detected: ${intent.matched_intention} (${Math.round(intent.confidence * 100)}% confidence)`
         );
       }
     } catch (error) {
-      console.error("Error handling message:", error);
-      const errorMessage = error instanceof Error ? error.message : "Sorry, I couldn't process your request right now.";
-      
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `${currentChatId}-${Date.now() + 1}`,
-          content: errorMessage,
-          sender: "ai",
-          timestamp: new Date(),
-          starred: false,
-        },
-      ]);
-      toast.error("Failed to process your message. Please try again.");
+      const errorMessage =
+        error instanceof Error ? error.message : "Sorry, I couldn't process your request right now.";
+
+      const errorMsg: Message = {
+        id: `${currentChatId}-${Date.now() + 1}`,
+        content: errorMessage,
+        sender: "ai",
+        timestamp: new Date(),
+        starred: false,
+        isError: true,
+      };
+
+      setMessages((prev) => [...prev, errorMsg]);
     } finally {
       setIsLoading(false);
     }
-  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentChatId, characterData]);
+
+  /**
+   * Retries the last failed request
+   */
+  const handleRetry = useCallback(() => {
+    const lastUserMsg = [...messages].reverse().find((m) => m.sender === "user");
+    if (!lastUserMsg) return;
+
+    // Remove the error message
+    setMessages((prev) => prev.filter((m) => !m.isError));
+
+    // Re-send the last user message
+    handleSendMessage(lastUserMsg.content);
+  }, [messages, handleSendMessage]);
 
   /**
    * Handles text-to-speech conversion and playback
    */
   const handleTextToSpeech = async (messageId: string, content: string) => {
     if (currentlyPlaying === messageId) {
-      // If currently playing this message, stop it
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.currentTime = 0;
-      }
+      audioRef.current?.pause();
+      if (audioRef.current) audioRef.current.currentTime = 0;
       setCurrentlyPlaying(null);
-    } else {
-      // If playing a different message, stop it first
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.currentTime = 0;
-      }
-      setCurrentlyPlaying(messageId);
-      if (!characterData) {
-        toast.error("Character data not loaded for text-to-speech.");
+      return;
+    }
+
+    audioRef.current?.pause();
+    if (audioRef.current) audioRef.current.currentTime = 0;
+    setCurrentlyPlaying(messageId);
+
+    if (!characterData) {
+      toast.error("Character data not loaded for text-to-speech.");
+      setCurrentlyPlaying(null);
+      return;
+    }
+
+    try {
+      toast.info("Converting text to speech...");
+      const audioBlob = await ApiService.convertToSpeech({
+        text: content,
+        character: {
+          role: characterData.lifeStage.stage,
+          voiceId: characterData.voiceId,
+        },
+      });
+      const audioUrl = URL.createObjectURL(audioBlob);
+      audioRef.current = new Audio(audioUrl);
+      audioRef.current.play();
+      audioRef.current.onended = () => {
         setCurrentlyPlaying(null);
-        return;
-      }
-      try {
-        toast.info("Converting text to speech...");
-        console.log("About to call convertToSpeech", { content, characterData });
-        const audioBlob = await ApiService.convertToSpeech({
-          text: content,
-          character: {
-            role: characterData.lifeStage.stage,
-            voiceId: characterData.voiceId,
-          }
-        });
-        const audioUrl = URL.createObjectURL(audioBlob);
-        audioRef.current = new Audio(audioUrl);
-        audioRef.current.play();
-        audioRef.current.onended = () => {
-          setCurrentlyPlaying(null);
-          URL.revokeObjectURL(audioUrl);
-        };
-        audioRef.current.onerror = (error) => {
-          console.error("Audio playback error:", error);
-          toast.error("Failed to play audio.");
-          setCurrentlyPlaying(null);
-          URL.revokeObjectURL(audioUrl);
-        };
-      } catch (error) {
-        console.error("Error during text-to-speech:", error);
-        toast.error(`Failed to generate speech: ${error instanceof Error ? error.message : ''}`);
+        URL.revokeObjectURL(audioUrl);
+      };
+      audioRef.current.onerror = () => {
+        toast.error("Failed to play audio.");
         setCurrentlyPlaying(null);
-      }
+        URL.revokeObjectURL(audioUrl);
+      };
+    } catch (error) {
+      toast.error(
+        `Failed to generate speech: ${error instanceof Error ? error.message : ""}`
+      );
+      setCurrentlyPlaying(null);
     }
   };
 
@@ -247,12 +253,11 @@ export const useChatLogic = () => {
    * Toggles starred status of a message
    */
   const toggleStarMessage = (messageId: string) => {
-    setMessages(prev =>
-      prev.map(msg =>
+    setMessages((prev) =>
+      prev.map((msg) =>
         msg.id === messageId ? { ...msg, starred: !msg.starred } : msg
       )
     );
-
     const message = messages.find((msg) => msg.id === messageId);
     if (message) {
       toast[!message.starred ? "success" : "info"](
@@ -264,67 +269,82 @@ export const useChatLogic = () => {
   };
 
   const handleNewChat = () => {
-    // Generate new chat ID
     const newChatId = Date.now().toString();
-    
-    // Save current chat if it has messages
     if (messages.length > 0) {
-      const existingData = loadChatData(currentChatId);
-      saveChatWithFolder(currentChatId, messages, existingData.folderId);
+      const { folderId } = loadChatFromStorage(currentChatId);
+      saveChatToStorage(currentChatId, messages, folderId);
     }
-    
-    // Update current chat ID and clear messages
     setCurrentChatId(newChatId);
-    localStorage.setItem('currentChatId', newChatId);
+    try {
+      localStorage.setItem("currentChatId", newChatId);
+    } catch {}
     setMessages([]);
   };
 
   const loadChat = (chatId: string) => {
-    // Save current chat if it has messages
     if (messages.length > 0) {
-      const existingData = loadChatData(currentChatId);
-      saveChatWithFolder(currentChatId, messages, existingData.folderId);
+      const { folderId } = loadChatFromStorage(currentChatId);
+      saveChatToStorage(currentChatId, messages, folderId);
     }
-    
-    // Load the selected chat
     setCurrentChatId(chatId);
-    localStorage.setItem('currentChatId', chatId);
-    
-    // Load messages for the selected chat
-    const { messages: loadedMessages } = loadChatData(chatId);
-    setMessages(loadedMessages);
+    try {
+      localStorage.setItem("currentChatId", chatId);
+    } catch {}
+  };
+
+  const deleteChat = (chatId: string) => {
+    try {
+      localStorage.removeItem(`chat_${chatId}`);
+    } catch {}
+
+    if (chatId === currentChatId) {
+      handleNewChat();
+    }
+
+    toast.success("Chat deleted");
   };
 
   // Get all chat histories with folder information
-  const getChatHistories = () => {
-    const histories: { id: string; messages: Message[]; folderId: string }[] = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key?.startsWith('chat_')) {
-        const chatId = key.replace('chat_', '');
-        const { messages, folderId } = loadChatData(chatId);
-        if (messages.length > 0) {
-          histories.push({
-            id: chatId,
-            messages,
-            folderId
-          });
+  const getChatHistories = (): { id: string; messages: Message[]; folderId: string; title: string; updatedAt: number }[] => {
+    const histories: { id: string; messages: Message[]; folderId: string; title: string; updatedAt: number }[] = [];
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key?.startsWith("chat_")) {
+          const chatId = key.replace("chat_", "");
+          const { messages: msgs, folderId } = loadChatFromStorage(chatId);
+          if (msgs.length > 0) {
+            const firstUserMsg = msgs.find((m) => m.sender === "user");
+            const title = firstUserMsg
+              ? firstUserMsg.content.slice(0, 40) + (firstUserMsg.content.length > 40 ? "…" : "")
+              : "Untitled Chat";
+            histories.push({
+              id: chatId,
+              messages: msgs,
+              folderId,
+              title,
+              updatedAt: parseInt(chatId, 10) || 0,
+            });
+          }
         }
       }
-    }
-    return histories;
+    } catch {}
+    return histories.sort((a, b) => b.updatedAt - a.updatedAt);
   };
 
   return {
     messages,
     isLoading,
+    chatLoading,
     characterData,
     currentlyPlaying,
     handleSendMessage,
+    handleRetry,
     handleTextToSpeech,
     toggleStarMessage,
     handleNewChat,
     loadChat,
+    deleteChat,
     currentChatId,
     starredMessages: messages.filter((msg) => msg.starred),
     getChatHistories,
