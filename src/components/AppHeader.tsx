@@ -129,6 +129,16 @@ const AppHeader = ({ messages, onLoadChat, currentChatId, onNewChat, selectedDom
 
     const foldersMap = new Map<string, ChatFolder>();
     foldersMap.set('default', defaultFolder);
+    
+    // Create pseudo-folder for Starred Messages
+    const starredFolder: ChatFolder = {
+      id: 'starred',
+      name: 'Starred',
+      chats: [],
+      createdAt: new Date().toISOString()
+    };
+    foldersMap.set('starred', starredFolder);
+
     savedFolders.forEach(folder => {
       foldersMap.set(folder.id, { ...folder, chats: [] });
     });
@@ -145,9 +155,20 @@ const AppHeader = ({ messages, onLoadChat, currentChatId, onNewChat, selectedDom
       if (folder) {
         folder.chats.push({ id: chat.id, messages: chat.messages });
       }
+
+      // If any message in this chat is starred, also add it to the Starred category
+      if (chat.messages.some(msg => msg.starred)) {
+        foldersMap.get('starred')?.chats.push({ id: chat.id, messages: chat.messages });
+      }
     });
 
-    return { folders: Array.from(foldersMap.values()), unorganizedChats: [] };
+    // Make sure Starred sits right after General
+    const allFoldersArray = Array.from(foldersMap.values());
+    const starredIdx = allFoldersArray.findIndex(f => f.id === 'starred');
+    const starredItem = allFoldersArray.splice(starredIdx, 1)[0];
+    allFoldersArray.splice(1, 0, starredItem);
+
+    return { folders: allFoldersArray, unorganizedChats: [] };
   }, [messages, selectedFolderId, foldersVersion]);
 
   const handleCreateFolder = () => {
@@ -402,23 +423,20 @@ const AppHeader = ({ messages, onLoadChat, currentChatId, onNewChat, selectedDom
                 }
               }}
             >
-              <DialogHeader className="mb-6 shrink-0">
+              <DialogHeader className="mb-6 shrink-0 flex flex-row items-center justify-between">
                 <DialogTitle className="text-xl font-semibold">Folders</DialogTitle>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIsCreatingFolder(true)}
+                  className="h-8 rounded-full px-4 text-xs font-medium bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800 !mt-0"
+                >
+                  <Plus size={14} className="mr-1.5" /> New Folder
+                </Button>
               </DialogHeader>
 
               {/* Folder Management */}
               <div className="mb-6 shrink-0">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-base font-semibold text-gray-800 dark:text-gray-200">Folders</h3>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setIsCreatingFolder(true)}
-                    className="h-8 rounded-full px-4 text-xs font-medium bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800"
-                  >
-                    <Plus size={14} className="mr-1.5" /> New Folder
-                  </Button>
-                </div>
 
                 {isCreatingFolder && (
                   <div className="flex items-center gap-2 mb-4 p-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl shadow-sm">
@@ -458,9 +476,9 @@ const AppHeader = ({ messages, onLoadChat, currentChatId, onNewChat, selectedDom
                             : "bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-800 text-gray-700 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-700"
                         )}
                         onClick={() => handleSelectFolder(folder.id)}
-                        onDragOver={e => handleFolderDragOver(e, folder.id)}
+                        onDragOver={e => { if (folder.id !== 'starred') handleFolderDragOver(e, folder.id); }}
                         onDragLeave={handleFolderDragLeave}
-                        onDrop={e => handleFolderDrop(e, folder.id)}
+                        onDrop={e => { if (folder.id !== 'starred') handleFolderDrop(e, folder.id); }}
                       >
                         <div className="flex items-center gap-2">
                           {isSelected ? (
@@ -498,7 +516,7 @@ const AppHeader = ({ messages, onLoadChat, currentChatId, onNewChat, selectedDom
                                 {folder.name}
                               </span>
 
-                              {folder.id !== 'default' ? (
+                              {folder.id !== 'default' && folder.id !== 'starred' ? (
                                 <>
                               <div className="relative w-[52px] h-6 flex items-center justify-end shrink-0 ml-1">
                                 <Badge 
