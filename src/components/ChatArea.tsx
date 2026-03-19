@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   Star, Copy, Check, Code, Download, Image, FileText,
-  Sparkles, Play, Pause, ChevronDown
+  Sparkles, Play, Square, ChevronDown
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
@@ -983,12 +983,12 @@ const ChatArea = ({
                           variant="ghost" size="icon"
                           className={cn("h-6 w-6 rounded-full", isDarkMode ? "hover:bg-slate-700" : "hover:bg-slate-100")}
                           onClick={() => onPlayMessage(message.id, message.content)}
-                          aria-label={currentlyPlaying === message.id ? "Pause" : "Play"}
+                          aria-label={currentlyPlaying === message.id ? "Stop" : "Play"}
                         >
-                          {currentlyPlaying === message.id ? <Pause size={11} /> : <Play size={11} />}
+                          {currentlyPlaying === message.id ? <Square size={11} /> : <Play size={11} />}
                         </Button>
                       </TooltipTrigger>
-                      <TooltipContent>{currentlyPlaying === message.id ? "Pause" : "Play"}</TooltipContent>
+                      <TooltipContent>{currentlyPlaying === message.id ? "Stop" : "Play"}</TooltipContent>
                     </Tooltip>
                   </div>
                 )}
