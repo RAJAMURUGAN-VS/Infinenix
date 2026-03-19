@@ -9,12 +9,17 @@ export class PromptService {
   static createOptimizedSystemPrompt(intent: IntentResult): string {
     if (!intent.recommended_tools.length) {
       // Fallback prompt if no tools recommended
-      return `Return a JSON with two fields:
+      return `Return a valid JSON object only with exactly two string fields:
 
 1. **response**: Helpful answer to user's intent: "${intent.matched_intention || "Unknown"}".
 2. **code**: HTML + CSS code for a static website illustrating a useful method to address the user's query.
 
-Be specific and relevant to the task.`;
+    Rules:
+    - Output must be valid JSON (double quotes, escaped newlines where needed).
+    - Do not wrap JSON in markdown fences.
+    - Do not add any prose before or after the JSON object.
+
+    Be specific and relevant to the task.`;
     }
 
     // Pick top tool with highest confidence
@@ -29,13 +34,19 @@ Top recommended tool:
 - Name: ${topTool.name}
 - Description: ${topTool.description}
 
-Return a JSON with two fields:
+Return one valid JSON object only with exactly two string fields:
 
 1. "response": A helpful, concise explanation answering the user's intent.
 2. "code": Complete HTML + CSS code for a static website section that visually demonstrates and explains the method "${topTool.name}" to help the user achieve their goal.
 <html>...interactive flashcards or roadmap layout...</html>
 
 Make the HTML self-contained, clean, modern, responsive, and visually appealing. Avoid external dependencies.
+
+Strict output rules:
+- Return valid JSON only. No markdown code fences.
+- No extra keys besides "response" and "code".
+- "code" must be HTML content as a string.
+- No prose before or after the JSON object.
 
 Only return the JSON object, no extra text.`;
   }

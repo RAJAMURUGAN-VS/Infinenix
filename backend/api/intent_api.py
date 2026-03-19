@@ -24,7 +24,7 @@ from .intention_data import intention_data
 # Define Pydantic models for request/response types
 class IntentRequest(BaseModel):
     prompt: str
-    threshold: float = 0.5
+    threshold: float = 0.25
 
 class ToolRecommendation(BaseModel):
     name: str

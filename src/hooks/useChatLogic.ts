@@ -23,6 +23,63 @@ export interface ParsedAIResponse {
   code: string;
 }
 
+const looksLikeTaskPrompt = (text: string): boolean => {
+  const normalized = text.toLowerCase();
+  const taskSignals = [
+    "create", "build", "generate", "design", "plan", "write", "draft", "summarize",
+    "explain", "debug", "analyze", "improve", "help me", "roadmap", "itinerary",
+    "checklist", "template", "study", "budget", "compare", "translate"
+  ];
+  const casualSignals = ["hi", "hello", "hey", "how are you", "good morning", "good night"];
+
+  const hasTaskSignal = taskSignals.some((term) => normalized.includes(term));
+  const isPureCasual = casualSignals.some((term) => normalized.includes(term)) && normalized.length < 60;
+
+  return hasTaskSignal && !isPureCasual;
+};
+
+const extractJsonObjectText = (text: string): string | null => {
+  const fenced = text.match(/```json\s*([\s\S]*?)\s*```/i);
+  if (fenced?.[1]) return fenced[1].trim();
+
+  const trimmed = text.trim();
+  if (trimmed.startsWith('{') && trimmed.endsWith('}')) return trimmed;
+
+  const start = text.indexOf('{');
+  if (start === -1) return null;
+
+  let inString = false;
+  let escaped = false;
+  let depth = 0;
+
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+
+    if (ch === '{') depth++;
+    if (ch === '}') {
+      depth--;
+      if (depth === 0) {
+        return text.slice(start, i + 1).trim();
+      }
+    }
+  }
+
+  return null;
+};
+
 // --- localStorage helpers ---
 
 const saveChatToStorage = (chatId: string, messages: Message[], folderId: string) => {
@@ -107,10 +164,27 @@ export const useChatLogic = () => {
    * Parses AI response, attempting JSON first, falling back to raw content
    */
   const parseAIResponse = (rawContent: string): ParsedAIResponse => {
+    const jsonText = extractJsonObjectText(rawContent);
+
+    if (jsonText) {
+      try {
+        const parsed = JSON.parse(jsonText) as Partial<ParsedAIResponse>;
+        const response = typeof parsed.response === "string" ? parsed.response : rawContent;
+        const code = typeof parsed.code === "string" ? parsed.code : "";
+        return { response, code };
+      } catch {
+        // Continue to fallback handling
+      }
+    }
+
+    const htmlFenceMatch = rawContent.match(/```html\s*([\s\S]*?)\s*```/i);
+    if (htmlFenceMatch?.[1]) {
+      const withoutFence = rawContent.replace(/```html\s*[\s\S]*?\s*```/i, "").trim();
+      return { response: withoutFence, code: htmlFenceMatch[1].trim() };
+    }
+
     try {
-      const jsonStart = rawContent.indexOf("{");
-      const jsonString = jsonStart >= 0 ? rawContent.slice(jsonStart) : rawContent;
-      return JSON.parse(jsonString);
+      return JSON.parse(rawContent);
     } catch {
       return { response: rawContent, code: "" };
     }
@@ -155,7 +229,7 @@ export const useChatLogic = () => {
 
     try {
       const intent = await ApiService.classifyIntent(content);
-      const threshold = 0.3;
+      const threshold = 0.25;
 
       let systemPrompt: string;
       let shouldShowIntentToast = false;
@@ -163,6 +237,9 @@ export const useChatLogic = () => {
       if (intent.matched_intention && intent.confidence >= threshold) {
         systemPrompt = PromptService.createOptimizedSystemPrompt(intent);
         shouldShowIntentToast = true;
+      } else if (looksLikeTaskPrompt(content)) {
+        // Local keyword classifier may miss many valid task prompts; still request structured JSON/code.
+        systemPrompt = PromptService.createOptimizedSystemPrompt(intent);
       } else {
         systemPrompt = PromptService.createCasualSystemPrompt(characterData);
       }

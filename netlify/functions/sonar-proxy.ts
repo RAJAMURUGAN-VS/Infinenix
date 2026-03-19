@@ -39,11 +39,12 @@ const handler: Handler = async (event: HandlerEvent) => {
     });
 
     const data = await response.text();
+    const upstreamContentType = response.headers.get("content-type") || "application/json";
 
     return {
       statusCode: response.status,
       headers: {
-        "Content-Type": "application/json",
+        "Content-Type": upstreamContentType,
       },
       body: data,
     };

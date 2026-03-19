@@ -203,7 +203,7 @@ function keywordMatch(query: string): { intention: IntentRecord; score: number }
  */
 export async function classifyIntent(
   query: string,
-  threshold: number = 0.3
+  threshold: number = 0.25
 ): Promise<IntentResponse> {
   console.log(`[IntentClassifier] Classifying query: "${query.substring(0, 50)}..."`);
   

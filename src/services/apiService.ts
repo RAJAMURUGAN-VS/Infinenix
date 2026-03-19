@@ -108,6 +108,14 @@ export class ApiService {
     systemContent: string,
     onChunk: (chunk: string) => void
   ): Promise<string> {
+    // Netlify function path is more reliable with non-streaming responses.
+    // Keep local dev streaming for real-time UX.
+    if (!import.meta.env.DEV) {
+      const fullText = await ApiService.getSonarResponse(userMessage, systemContent);
+      if (fullText) onChunk(fullText);
+      return fullText;
+    }
+
     const { url, init } = ApiService.buildRequest(userMessage, systemContent, true);
 
     const response = await fetch(url, init);
@@ -126,13 +134,17 @@ export class ApiService {
     const decoder = new TextDecoder();
     let fullText = '';
 
+    let buffer = '';
+
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
 
       // Each chunk may contain multiple SSE lines: "data: {...}\n\ndata: {...}\n\n"
       const raw = decoder.decode(value, { stream: true });
-      const lines = raw.split('\n');
+      buffer += raw;
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
 
       for (const line of lines) {
         const trimmed = line.trim();
@@ -156,6 +168,24 @@ export class ApiService {
           }
         } catch (e) {
           console.log('[ApiService] Failed to parse JSON chunk:', jsonStr, e);
+        }
+      }
+    }
+
+    // Try to parse any remaining buffered line
+    const trailing = buffer.trim();
+    if (trailing.startsWith('data:')) {
+      const jsonStr = trailing.slice(5).trim();
+      if (jsonStr !== '[DONE]') {
+        try {
+          const parsed = JSON.parse(jsonStr);
+          const delta = parsed.choices?.[0]?.delta?.content;
+          if (delta) {
+            fullText += delta;
+            onChunk(delta);
+          }
+        } catch {
+          // Ignore trailing incomplete payload
         }
       }
     }

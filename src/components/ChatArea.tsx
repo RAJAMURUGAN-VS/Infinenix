@@ -199,6 +199,48 @@ interface ParsedResponse {
   code?: string;
 }
 
+const extractJsonObjectText = (text: string): string | null => {
+  const fenced = text.match(/```json\s*([\s\S]*?)\s*```/i);
+  if (fenced?.[1]) return fenced[1].trim();
+
+  const trimmed = text.trim();
+  if (trimmed.startsWith("{") && trimmed.endsWith("}")) return trimmed;
+
+  const start = text.indexOf("{");
+  if (start === -1) return null;
+
+  let inString = false;
+  let escaped = false;
+  let depth = 0;
+
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+
+    if (ch === "{") depth++;
+    if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        return text.slice(start, i + 1).trim();
+      }
+    }
+  }
+
+  return null;
+};
+
 const SUGGESTION_CHIPS = [
   "What can you help me with?",
   "Summarize a topic for me",
@@ -363,6 +405,19 @@ const ChatArea = ({
   };
 
   const parseAIResponse = (content: string): ParsedResponse | null => {
+    const jsonText = extractJsonObjectText(content);
+    if (jsonText) {
+      try {
+        const parsed = JSON.parse(jsonText) as ParsedResponse;
+        return {
+          response: typeof parsed.response === "string" ? parsed.response : content,
+          code: typeof parsed.code === "string" ? parsed.code : "",
+        };
+      } catch {
+        // Continue to fallback parsing
+      }
+    }
+
     try {
       const jsonMatch =
         content.match(/```json\s*({[\s\S]*?})\s*```/) ||
@@ -382,6 +437,13 @@ const ChatArea = ({
           codeContent.match(/```\s*(<!DOCTYPE html[\s\S]*?)\s*```/);
         return { response: beforeCode, code: htmlMatch ? htmlMatch[1] : codeContent };
       }
+
+      const htmlFenceMatch = content.match(/```html\s*([\s\S]*?)\s*```/i);
+      if (htmlFenceMatch?.[1]) {
+        const response = content.replace(/```html\s*[\s\S]*?\s*```/i, "").trim();
+        return { response, code: htmlFenceMatch[1].trim() };
+      }
+
       return { response: content, code: "" };
     } catch {
       return null;

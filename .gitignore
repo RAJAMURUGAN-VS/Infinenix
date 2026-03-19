@@ -23,7 +23,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-
+workspace.code-workspace
 # Python cache files
 __pycache__/
 *.py[cod]
