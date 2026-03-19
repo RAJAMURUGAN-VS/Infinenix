@@ -1,21 +1,19 @@
 /**
  * API Service for intent classification and AI responses
- * 
+ *
  * Architecture:
  * 1. Local intent classification uses precomputed embeddings (no ML at runtime)
  * 2. Falls back to Sonar API for AI responses
- * 3. Graceful error handling at each step
+ * 3. Streaming support via getSonarResponseStream()
+ * 4. Graceful error handling at each step
  */
 
 import { classifyIntent as localClassifyIntent } from './intentClassifier';
 
-// In dev, Vite proxy forwards to Perplexity directly (uses VITE_SONAR_API_TOKEN).
-// In production, requests go to a Netlify serverless function that holds the token server-side.
 const getSonarApiUrl = () => import.meta.env.DEV
   ? "/api/perplexity/chat/completions"
   : "/.netlify/functions/sonar-proxy";
 
-// Only used in development; production token lives in the serverless function
 const getSonarApiToken = () => import.meta.env.DEV ? import.meta.env.VITE_SONAR_API_TOKEN : null;
 
 export interface IntentResult {
@@ -39,167 +37,183 @@ export interface SpeechRequest {
 export class ApiService {
   /**
    * Classifies user intent using local precomputed embeddings
-   * No ML libraries are loaded - uses pure JavaScript cosine similarity
-   * 
-   * @param prompt - The user's message to classify
-   * @returns Intent classification result (may have null matched_intention)
    */
   static async classifyIntent(prompt: string): Promise<IntentResult> {
     try {
       console.log('[ApiService] Starting local intent classification...');
       const response = await localClassifyIntent(prompt, 0.3);
-      
       console.log('[ApiService] Local intent classification result:', {
         matched: response.matchedIntention,
         confidence: response.confidence,
         isFallback: response.isFallback,
       });
-      
-      // Map response to match the expected IntentResult format
       return {
         matched_intention: response.matchedIntention,
         confidence: response.confidence,
         recommended_tools: response.recommendedTools,
       };
     } catch (error) {
-      // Log error but don't crash - return a fallback result
       console.warn('[ApiService] Local intent classification failed:', error);
-      console.log('[ApiService] Returning fallback intent result');
-      
-      return { 
-        matched_intention: null, 
-        confidence: 0, 
-        recommended_tools: [] 
-      };
+      return { matched_intention: null, confidence: 0, recommended_tools: [] };
     }
   }
 
   /**
-   * Fetches AI response from Sonar API
-   * 
-   * @param userMessage - The user's message
-   * @param systemContent - System prompt for the AI
-   * @returns AI response text
-   * @throws Error if API request fails
+   * Builds the shared fetch request for Sonar — used by both stream and non-stream paths.
    */
-  static async getSonarResponse(userMessage: string, systemContent: string): Promise<string> {
-    const SONAR_API_TOKEN = getSonarApiToken();
+  private static buildRequest(
+    userMessage: string,
+    systemContent: string,
+    stream: boolean
+  ): { url: string; init: RequestInit } {
+    const token = getSonarApiToken();
 
-    // In development, a token is required (Vite proxy forwards to Perplexity directly).
-    // In production, the serverless function supplies the token.
-    if (import.meta.env.DEV && !SONAR_API_TOKEN) {
-      console.error('[ApiService] VITE_SONAR_API_TOKEN is not configured for development');
+    if (import.meta.env.DEV && !token) {
       throw new Error(
         'Sonar API is not configured. Please set VITE_SONAR_API_TOKEN environment variable.'
       );
     }
 
-    const requestPayload = {
-      model: "sonar",
-      messages: [
-        { role: "system", content: systemContent },
-        { role: "user", content: userMessage },
-      ],
-    };
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (token) headers.Authorization = `Bearer ${token}`;
 
-    console.log('[ApiService] Sending request to Sonar AI...');
+    const selectedModel = (() => {
+      try { return localStorage.getItem("selectedModel") || "sonar"; }
+      catch { return "sonar"; }
+    })();
 
-    try {
-      const SONAR_API_URL = getSonarApiUrl();
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-      };
-      // Only attach Authorization header in dev (production uses serverless proxy)
-      if (SONAR_API_TOKEN) {
-        headers.Authorization = `Bearer ${SONAR_API_TOKEN}`;
-      }
-      const response = await fetch(SONAR_API_URL, {
+    return {
+      url: getSonarApiUrl(),
+      init: {
         method: "POST",
         headers,
-        body: JSON.stringify(requestPayload),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => 'Unknown error');
-        
-        // Handle specific HTTP errors
-        if (response.status === 401) {
-          console.error('[ApiService] Sonar API authentication failed (401 Unauthorized)');
-          throw new Error(
-            'Sonar API authentication failed. Please check your API token.'
-          );
-        }
-        
-        if (response.status === 429) {
-          console.error('[ApiService] Sonar API rate limit exceeded (429)');
-          throw new Error(
-            'Rate limit exceeded. Please try again in a moment.'
-          );
-        }
-        
-        console.error(`[ApiService] Sonar API error: ${response.status} ${response.statusText}`, errorText);
-        throw new Error(`Sonar API request failed: ${response.status} ${response.statusText}`);
-      }
-
-      const data = await response.json();
-      console.log('[ApiService] Sonar AI response received successfully');
-
-      const content = data.choices?.[0]?.message?.content;
-      if (!content) {
-        console.warn('[ApiService] Sonar API returned empty response');
-        return "I received your message but couldn't generate a response. Please try again.";
-      }
-      
-      return content;
-    } catch (error) {
-      // Re-throw if it's already a formatted error
-      if (error instanceof Error && error.message.includes('Sonar API')) {
-        throw error;
-      }
-      
-      // Network or other errors
-      console.error('[ApiService] Network error calling Sonar API:', error);
-      throw new Error(
-        'Unable to reach the AI service. Please check your internet connection and try again.'
-      );
-    }
+        body: JSON.stringify({
+          model: selectedModel,
+          stream,
+          messages: [
+            { role: "system", content: systemContent },
+            { role: "user", content: userMessage },
+          ],
+        }),
+      },
+    };
   }
 
   /**
-   * Converts text to speech using browser's Web Speech API
-   * Falls back gracefully if speech synthesis is not available
+   * STREAMING path — calls onChunk(text) for each token, returns full text when done.
+   * Usage: await ApiService.getSonarResponseStream(msg, sys, (chunk) => appendToMessage(chunk))
+   */
+  static async getSonarResponseStream(
+    userMessage: string,
+    systemContent: string,
+    onChunk: (chunk: string) => void
+  ): Promise<string> {
+    const { url, init } = ApiService.buildRequest(userMessage, systemContent, true);
+
+    const response = await fetch(url, init);
+    console.log('[ApiService] Sonar AI stream connection established (status: ' + response.status + ')');
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => 'Unknown error');
+      if (response.status === 401) throw new Error('Sonar API authentication failed. Please check your API token.');
+      if (response.status === 429) throw new Error('Rate limit exceeded. Please try again in a moment.');
+      throw new Error(`Sonar API request failed: ${response.status} ${response.statusText} — ${errorText}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('No response body available for streaming');
+
+    const decoder = new TextDecoder();
+    let fullText = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      // Each chunk may contain multiple SSE lines: "data: {...}\n\ndata: {...}\n\n"
+      const raw = decoder.decode(value, { stream: true });
+      const lines = raw.split('\n');
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data:')) continue;
+
+        const jsonStr = trimmed.slice(5).trim();
+        if (jsonStr === '[DONE]') {
+          console.log('[ApiService] Stream [DONE] signal received');
+          continue;
+        }
+
+        console.log('[ApiService] Raw SSE data received:', jsonStr);
+
+        try {
+          const parsed = JSON.parse(jsonStr);
+          const delta = parsed.choices?.[0]?.delta?.content;
+          if (delta) {
+            console.log('[ApiService] Stream chunk extracted. Delta length:', delta.length);
+            fullText += delta;
+            onChunk(delta);
+          }
+        } catch (e) {
+          console.log('[ApiService] Failed to parse JSON chunk:', jsonStr, e);
+        }
+      }
+    }
+
+    console.log('[ApiService] Sonar AI streaming complete. Final text length:', fullText.length);
+    console.log('[ApiService] Full Response:', fullText);
+
+    return fullText;
+  }
+
+  /**
+   * NON-STREAMING path — kept for fallback/retry scenarios.
+   */
+  static async getSonarResponse(userMessage: string, systemContent: string): Promise<string> {
+    const { url, init } = ApiService.buildRequest(userMessage, systemContent, false);
+
+    const response = await fetch(url, init);
+    console.log('[ApiService] Sonar AI static request completed (status: ' + response.status + ')');
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => 'Unknown error');
+      if (response.status === 401) throw new Error('Sonar API authentication failed. Please check your API token.');
+      if (response.status === 429) throw new Error('Rate limit exceeded. Please try again in a moment.');
+      throw new Error(`Sonar API request failed: ${response.status} ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    console.log('[ApiService] Sonar AI raw response object:', data);
+
+    const content = data.choices?.[0]?.message?.content;
+    if (!content) {
+      console.warn('[ApiService] Sonar API returned empty response, full raw data:', data);
+      return "I received your message but couldn't generate a response. Please try again.";
+    }
+    
+    console.log('[ApiService] Extracted Sonar AI content length:', content.length);
+    return content;
+  }
+
+  /**
+   * Text-to-speech via browser Web Speech API
    */
   static async convertToSpeech(speechRequest: SpeechRequest): Promise<Blob> {
-    // Use browser's Web Speech API
     if (!('speechSynthesis' in window)) {
       throw new Error('Speech synthesis not supported in this browser');
     }
 
     return new Promise((resolve, reject) => {
       const utterance = new SpeechSynthesisUtterance(speechRequest.text);
-      
-      // Try to find a suitable voice
       const voices = window.speechSynthesis.getVoices();
       if (voices.length > 0) {
-        // Try to find an English voice
         const englishVoice = voices.find(v => v.lang.startsWith('en'));
-        if (englishVoice) {
-          utterance.voice = englishVoice;
-        }
+        if (englishVoice) utterance.voice = englishVoice;
       }
-      
       utterance.rate = 1.0;
       utterance.pitch = 1.0;
-      
-      utterance.onend = () => {
-        // Return an empty blob since we're using native speech
-        resolve(new Blob([], { type: 'audio/wav' }));
-      };
-      
-      utterance.onerror = (event) => {
-        reject(new Error(`Speech synthesis error: ${event.error}`));
-      };
-      
+      utterance.onend = () => resolve(new Blob([], { type: 'audio/wav' }));
+      utterance.onerror = (event) => reject(new Error(`Speech synthesis error: ${event.error}`));
       window.speechSynthesis.speak(utterance);
     });
   }

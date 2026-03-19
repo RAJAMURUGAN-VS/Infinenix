@@ -52,6 +52,7 @@ export const useChatLogic = () => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [chatLoading, setChatLoading] = useState(false);
+  const [historyVersion, setHistoryVersion] = useState(0);
   const [characterData, setCharacterData] = useState<CharacterData | null>(null);
   const [currentlyPlaying, setCurrentlyPlaying] = useState<string | null>(null);
   const [currentChatId, setCurrentChatId] = useState<string>(() => {
@@ -69,7 +70,7 @@ export const useChatLogic = () => {
     if (character) setCharacterData(character);
   }, []);
 
-  // Load messages when chat ID changes (with skeleton delay)
+  // Load messages when chat ID changes
   useEffect(() => {
     setChatLoading(true);
     const { messages: loaded } = loadChatFromStorage(currentChatId);
@@ -82,8 +83,12 @@ export const useChatLogic = () => {
   }, [currentChatId]);
 
   // Persist messages to localStorage whenever they change
+  // Skip messages that are still streaming — wait until complete
   useEffect(() => {
     if (messages.length === 0) return;
+    const hasStreaming = messages.some(m => m.isStreaming);
+    if (hasStreaming) return; // don't persist mid-stream
+
     try {
       const newChatFolderId = localStorage.getItem("newChatFolderId");
       if (newChatFolderId) {
@@ -112,7 +117,13 @@ export const useChatLogic = () => {
   };
 
   /**
-   * Handles the complete message sending flow
+   * Handles the complete message sending flow with streaming.
+   *
+   * Flow:
+   * 1. Add user message immediately
+   * 2. Add a placeholder AI message with isStreaming=true and empty content
+   * 3. Stream chunks → append to that message's content in real time
+   * 4. When stream ends → set isStreaming=false, parse for code blocks
    */
   const handleSendMessage = useCallback(async (content: string) => {
     if (!content.trim()) {
@@ -128,7 +139,18 @@ export const useChatLogic = () => {
       starred: false,
     };
 
-    setMessages((prev) => [...prev, userMessage]);
+    // Placeholder AI message — shown while streaming
+    const aiMessageId = `${currentChatId}-${Date.now() + 1}`;
+    const aiPlaceholder: Message = {
+      id: aiMessageId,
+      content: "",
+      sender: "ai",
+      timestamp: new Date(),
+      starred: false,
+      isStreaming: true,
+    };
+
+    setMessages(prev => [...prev, userMessage, aiPlaceholder]);
     setIsLoading(true);
 
     try {
@@ -145,20 +167,34 @@ export const useChatLogic = () => {
         systemPrompt = PromptService.createCasualSystemPrompt(characterData);
       }
 
-      const aiRawContent = await ApiService.getSonarResponse(content, systemPrompt);
-      const aiParsed = parseAIResponse(aiRawContent);
+      // Stream response — each chunk appends to the AI message content
+      const fullText = await ApiService.getSonarResponseStream(
+        content,
+        systemPrompt,
+        (chunk: string) => {
+          setMessages(prev =>
+            prev.map(m =>
+              m.id === aiMessageId
+                ? { ...m, content: m.content + chunk }
+                : m
+            )
+          );
+        }
+      );
 
-      const aiMessage: Message = {
-        id: `${currentChatId}-${Date.now() + 1}`,
-        content:
-          aiParsed.response +
-          (aiParsed.code ? `\n\n### Render Code Below ###\n${aiParsed.code}` : ""),
-        sender: "ai",
-        timestamp: new Date(),
-        starred: false,
-      };
+      // Stream complete — parse for code blocks, clear streaming flag
+      const aiParsed = parseAIResponse(fullText);
+      const finalContent =
+        aiParsed.response +
+        (aiParsed.code ? `\n\n### Render Code Below ###\n${aiParsed.code}` : "");
 
-      setMessages((prev) => [...prev, aiMessage]);
+      setMessages(prev =>
+        prev.map(m =>
+          m.id === aiMessageId
+            ? { ...m, content: finalContent, isStreaming: false }
+            : m
+        )
+      );
 
       if (shouldShowIntentToast) {
         toast.success(
@@ -169,38 +205,31 @@ export const useChatLogic = () => {
       const errorMessage =
         error instanceof Error ? error.message : "Sorry, I couldn't process your request right now.";
 
-      const errorMsg: Message = {
-        id: `${currentChatId}-${Date.now() + 1}`,
-        content: errorMessage,
-        sender: "ai",
-        timestamp: new Date(),
-        starred: false,
-        isError: true,
-      };
-
-      setMessages((prev) => [...prev, errorMsg]);
+      // Replace placeholder with error message
+      setMessages(prev =>
+        prev.map(m =>
+          m.id === aiMessageId
+            ? { ...m, content: errorMessage, isStreaming: false, isError: true }
+            : m
+        )
+      );
     } finally {
       setIsLoading(false);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentChatId, characterData]);
 
   /**
    * Retries the last failed request
    */
   const handleRetry = useCallback(() => {
-    const lastUserMsg = [...messages].reverse().find((m) => m.sender === "user");
+    const lastUserMsg = [...messages].reverse().find(m => m.sender === "user");
     if (!lastUserMsg) return;
-
-    // Remove the error message
-    setMessages((prev) => prev.filter((m) => !m.isError));
-
-    // Re-send the last user message
+    setMessages(prev => prev.filter(m => !m.isError));
     handleSendMessage(lastUserMsg.content);
   }, [messages, handleSendMessage]);
 
   /**
-   * Handles text-to-speech conversion and playback
+   * Text-to-speech
    */
   const handleTextToSpeech = async (messageId: string, content: string) => {
     if (currentlyPlaying === messageId) {
@@ -242,9 +271,7 @@ export const useChatLogic = () => {
         URL.revokeObjectURL(audioUrl);
       };
     } catch (error) {
-      toast.error(
-        `Failed to generate speech: ${error instanceof Error ? error.message : ""}`
-      );
+      toast.error(`Failed to generate speech: ${error instanceof Error ? error.message : ""}`);
       setCurrentlyPlaying(null);
     }
   };
@@ -253,12 +280,12 @@ export const useChatLogic = () => {
    * Toggles starred status of a message
    */
   const toggleStarMessage = (messageId: string) => {
-    setMessages((prev) =>
-      prev.map((msg) =>
+    setMessages(prev =>
+      prev.map(msg =>
         msg.id === messageId ? { ...msg, starred: !msg.starred } : msg
       )
     );
-    const message = messages.find((msg) => msg.id === messageId);
+    const message = messages.find(msg => msg.id === messageId);
     if (message) {
       toast[!message.starred ? "success" : "info"](
         !message.starred
@@ -275,9 +302,7 @@ export const useChatLogic = () => {
       saveChatToStorage(currentChatId, messages, folderId);
     }
     setCurrentChatId(newChatId);
-    try {
-      localStorage.setItem("currentChatId", newChatId);
-    } catch {}
+    try { localStorage.setItem("currentChatId", newChatId); } catch {}
     setMessages([]);
   };
 
@@ -286,26 +311,32 @@ export const useChatLogic = () => {
       const { folderId } = loadChatFromStorage(currentChatId);
       saveChatToStorage(currentChatId, messages, folderId);
     }
+    setMessages([]); // Clear synchronously so persistence effect doesn't overwrite new chatId with old messages
     setCurrentChatId(chatId);
-    try {
-      localStorage.setItem("currentChatId", chatId);
-    } catch {}
+    try { localStorage.setItem("currentChatId", chatId); } catch {}
   };
 
   const deleteChat = (chatId: string) => {
-    try {
-      localStorage.removeItem(`chat_${chatId}`);
-    } catch {}
-
-    if (chatId === currentChatId) {
-      handleNewChat();
-    }
-
+    try { localStorage.removeItem(`chat_${chatId}`); } catch {}
+    if (chatId === currentChatId) handleNewChat();
+    else setHistoryVersion(v => v + 1);
     toast.success("Chat deleted");
   };
 
-  // Get all chat histories with folder information
-  const getChatHistories = (): { id: string; messages: Message[]; folderId: string; title: string; updatedAt: number }[] => {
+  const moveChatToFolder = (chatId: string, targetFolderId: string) => {
+    try {
+      const { messages: msgs } = loadChatFromStorage(chatId);
+      saveChatToStorage(chatId, msgs, targetFolderId);
+      setHistoryVersion(v => v + 1);
+      toast.success("Chat moved to folder");
+    } catch (e) {
+      console.warn("Failed to move chat to folder:", e);
+    }
+  };
+
+  const getChatHistories = (): {
+    id: string; messages: Message[]; folderId: string; title: string; updatedAt: number
+  }[] => {
     const histories: { id: string; messages: Message[]; folderId: string; title: string; updatedAt: number }[] = [];
     try {
       for (let i = 0; i < localStorage.length; i++) {
@@ -314,17 +345,11 @@ export const useChatLogic = () => {
           const chatId = key.replace("chat_", "");
           const { messages: msgs, folderId } = loadChatFromStorage(chatId);
           if (msgs.length > 0) {
-            const firstUserMsg = msgs.find((m) => m.sender === "user");
+            const firstUserMsg = msgs.find(m => m.sender === "user");
             const title = firstUserMsg
               ? firstUserMsg.content.slice(0, 40) + (firstUserMsg.content.length > 40 ? "…" : "")
               : "Untitled Chat";
-            histories.push({
-              id: chatId,
-              messages: msgs,
-              folderId,
-              title,
-              updatedAt: parseInt(chatId, 10) || 0,
-            });
+            histories.push({ id: chatId, messages: msgs, folderId, title, updatedAt: parseInt(chatId, 10) || 0 });
           }
         }
       }
@@ -345,8 +370,9 @@ export const useChatLogic = () => {
     handleNewChat,
     loadChat,
     deleteChat,
+    moveChatToFolder,
     currentChatId,
-    starredMessages: messages.filter((msg) => msg.starred),
+    starredMessages: messages.filter(msg => msg.starred),
     getChatHistories,
   };
 };

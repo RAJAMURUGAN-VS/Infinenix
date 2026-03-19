@@ -1,19 +1,18 @@
 import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Send, Paperclip, Image, FileText, Mic, Smile } from "lucide-react";
+import { Send, Paperclip, Image, FileText, Mic, Smile, Brain, Sparkles, Star, Code2, ChevronDown } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Card } from "@/components/ui/card";
 import { useTheme } from "@/contexts/ThemeContext";
 import { cn } from "@/lib/utils";
 
 const INPUT_LIMIT = 2000;
-const MAX_TEXTAREA_HEIGHT = 120; // ~5 lines
+const MAX_TEXTAREA_HEIGHT = 200;
 
 interface MessageInputProps {
   onSendMessage: (content: string) => void;
@@ -25,15 +24,32 @@ interface MessageInputProps {
 
 const MessageInput = ({ onSendMessage, disabled, initialMessage, inputText, setInputText }: MessageInputProps) => {
   const [isRecording, setIsRecording] = useState(false);
+  const [selectedModel, setSelectedModel] = useState(() => {
+    try { return localStorage.getItem("selectedModel") || "sonar"; }
+    catch { return "sonar"; }
+  });
   const { isDarkMode } = useTheme();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Prefill from initialMessage
+  const models = [
+    { name: "sonar",               icon: Brain,    label: "Sonar" },
+    { name: "sonar-pro",           icon: Sparkles, label: "Sonar Pro" },
+    { name: "sonar-reasoning",     icon: Star,     label: "Reasoning" },
+    { name: "sonar-reasoning-pro", icon: Code2,    label: "Reasoning Pro" },
+    { name: "sonar-deep-research", icon: Brain,    label: "Deep Research" },
+  ];
+
+  const currentModel = models.find(m => m.name === selectedModel) || models[0];
+
+  const handleSelectModel = (name: string) => {
+    setSelectedModel(name);
+    try { localStorage.setItem("selectedModel", name); } catch { /* ignore */ }
+  };
+
   useEffect(() => {
     if (initialMessage) setInputText(initialMessage);
   }, [initialMessage, setInputText]);
 
-  // Auto-expand textarea height
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
@@ -45,10 +61,7 @@ const MessageInput = ({ onSendMessage, disabled, initialMessage, inputText, setI
     if (inputText.trim() && !disabled) {
       onSendMessage(inputText);
       setInputText("");
-      // Reset height after clearing
-      if (textareaRef.current) {
-        textareaRef.current.style.height = "44px";
-      }
+      if (textareaRef.current) textareaRef.current.style.height = "24px";
     }
   };
 
@@ -68,10 +81,7 @@ const MessageInput = ({ onSendMessage, disabled, initialMessage, inputText, setI
     input.click();
     input.onchange = (e) => {
       const files = (e.target as HTMLInputElement).files;
-      if (files?.length) {
-        // TODO: Handle file upload logic
-        console.log("Selected files:", files);
-      }
+      if (files?.length) console.log("Selected files:", files);
     };
   };
 
@@ -80,127 +90,193 @@ const MessageInput = ({ onSendMessage, disabled, initialMessage, inputText, setI
   const canSend = !!inputText.trim() && !disabled && !isAtLimit;
 
   return (
+    /* Outer wrapper — same bg as ChatArea so it blends in */
     <div className={cn(
-      "border-t backdrop-blur-sm transition-colors duration-200 sticky bottom-0 z-10",
-      isDarkMode ? "border-slate-700 bg-slate-900/90" : "border-slate-200 bg-white/90"
+      "transition-colors duration-200 flex-shrink-0",
+      isDarkMode ? "bg-slate-900" : "bg-white"
     )}>
-      <div className="p-4 max-w-4xl mx-auto">
-        <Card className={cn("shadow-lg", isDarkMode ? "border-slate-700 bg-slate-800" : "border-2 border-slate-200 bg-white")}>
-          <div className="flex items-end gap-3 p-4">
-            {/* Attachment Menu */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost" size="icon"
-                  className={cn("flex-shrink-0 h-10 w-10 rounded-full transition-colors", isDarkMode ? "hover:bg-slate-700 text-slate-400" : "hover:bg-slate-100 text-slate-600")}
-                  aria-label="Attach file"
-                >
-                  <Paperclip size={18} />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className={cn("w-48", isDarkMode && "bg-slate-700 border-slate-600 text-slate-200")}>
-                <DropdownMenuItem onClick={() => handleFileUpload("image")} className={isDarkMode ? "hover:bg-slate-600" : ""}>
-                  <Image size={16} className="mr-2 text-blue-500" /> Upload Image
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleFileUpload("document")} className={isDarkMode ? "hover:bg-slate-600" : ""}>
-                  <FileText size={16} className="mr-2 text-green-500" /> Upload Document
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+      {/* Centered column — matches ChatArea's max-w-2xl */}
+      <div className="mx-auto w-full max-w-3xl px-6 pb-4 pt-2">
 
-            {/* Textarea */}
-            <div className="flex-grow relative">
-              <textarea
-                ref={textareaRef}
-                value={inputText}
-                onChange={(e) => setInputText(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="Type your message… (Shift+Enter for new line)"
-                maxLength={INPUT_LIMIT}
-                className={cn(
-                  "w-full py-3 px-4 pr-10 rounded-xl resize-none focus:outline-none focus:ring-2 transition-all duration-200 leading-relaxed",
-                  isDarkMode
-                    ? "bg-slate-700 text-slate-200 placeholder-slate-400 border border-slate-600 focus:ring-blue-700"
-                    : "bg-slate-50 text-slate-800 placeholder-slate-500 border border-transparent focus:ring-blue-500 focus:bg-white"
-                )}
-                style={{ minHeight: "44px", maxHeight: `${MAX_TEXTAREA_HEIGHT}px`, overflowY: "auto", resize: "none" }}
-                data-tour-element="prompt-input"
-                disabled={disabled}
-                aria-label="Message input"
-              />
-
-              {/* Emoji button */}
-              <Button
-                variant="ghost" size="icon"
-                className={cn("absolute right-2 top-2 h-7 w-7 rounded-full transition-colors", isDarkMode ? "hover:bg-slate-700 text-slate-400" : "hover:bg-slate-200 text-slate-500")}
-                aria-label="Add emoji"
-              >
-                <Smile size={15} />
-              </Button>
-            </div>
-
-            {/* Voice recording */}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost" size="icon"
-                  onClick={() => setIsRecording(!isRecording)}
-                  className={cn(
-                    "flex-shrink-0 h-10 w-10 rounded-full transition-all duration-200",
-                    isRecording ? "bg-red-100 hover:bg-red-200 text-red-600" : isDarkMode ? "hover:bg-slate-700 text-slate-400" : "hover:bg-slate-100 text-slate-600"
-                  )}
-                  aria-label={isRecording ? "Stop recording" : "Voice message"}
-                >
-                  <Mic size={18} className={isRecording ? "animate-pulse" : ""} />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent className={isDarkMode ? "bg-slate-700 border-slate-600 text-slate-200" : ""}>
-                {isRecording ? "Stop recording" : "Voice message"}
-              </TooltipContent>
-            </Tooltip>
-
-            {/* Send button */}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  onClick={handleSend}
-                  size="icon"
-                  disabled={!canSend}
-                  className={cn(
-                    "flex-shrink-0 h-10 w-10 rounded-full transition-all duration-200",
-                    canSend
-                      ? "bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95"
-                      : "opacity-50 cursor-not-allowed " + (isDarkMode ? "bg-slate-700" : "bg-slate-200")
-                  )}
-                  aria-label="Send message"
-                >
-                  <Send size={18} className={canSend ? "text-white" : isDarkMode ? "text-slate-400" : "text-slate-400"} />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent className={isDarkMode ? "bg-slate-700 border-slate-600 text-slate-200" : ""}>
-                Send message (Enter)
-              </TooltipContent>
-            </Tooltip>
+        {/* Floating input box — rounded-2xl with subtle shadow, like Claude */}
+        <div className={cn(
+          "relative rounded-2xl border transition-shadow duration-200",
+          "shadow-[0_2px_12px_rgba(0,0,0,0.08)] hover:shadow-[0_2px_16px_rgba(0,0,0,0.12)]",
+          isDarkMode
+            ? "bg-slate-800 border-slate-700"
+            : "bg-white border-slate-200"
+        )}>
+          {/* Textarea row */}
+          <div className="flex items-end gap-1 px-3 pt-3 pb-1">
+            <textarea
+              ref={textareaRef}
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Message Infenix…"
+              maxLength={INPUT_LIMIT}
+              className={cn(
+                "flex-1 resize-none focus:outline-none bg-transparent text-sm leading-relaxed py-1 px-1",
+                isDarkMode
+                  ? "text-slate-200 placeholder-slate-500"
+                  : "text-slate-800 placeholder-slate-400"
+              )}
+              style={{ minHeight: "24px", maxHeight: `${MAX_TEXTAREA_HEIGHT}px`, overflowY: "auto", resize: "none" }}
+              data-tour-element="prompt-input"
+              disabled={disabled}
+              aria-label="Message input"
+            />
           </div>
 
-          {/* Hints row */}
-          <div className={cn("px-4 pb-3 flex justify-between items-center text-xs", isDarkMode ? "text-slate-400" : "text-slate-500")}>
-            <div className="flex items-center gap-4">
-              <span>Enter to send · Shift+Enter for new line</span>
+          {/* Bottom toolbar */}
+          <div className="flex items-center justify-between px-2 pb-2">
+            {/* Left — attach + mic */}
+            <div className="flex items-center gap-0.5">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost" size="icon"
+                    className={cn(
+                      "h-8 w-8 rounded-lg transition-colors",
+                      isDarkMode ? "text-slate-400 hover:bg-slate-700 hover:text-slate-200" : "text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                    )}
+                    aria-label="Attach file"
+                  >
+                    <Paperclip size={15} />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className={cn("w-48", isDarkMode && "bg-slate-700 border-slate-600 text-slate-200")}>
+                  <DropdownMenuItem onClick={() => handleFileUpload("image")} className={isDarkMode ? "hover:bg-slate-600" : ""}>
+                    <Image size={14} className="mr-2 text-blue-500" /> Upload Image
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleFileUpload("document")} className={isDarkMode ? "hover:bg-slate-600" : ""}>
+                    <FileText size={14} className="mr-2 text-green-500" /> Upload Document
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost" size="icon"
+                    onClick={() => setIsRecording(!isRecording)}
+                    className={cn(
+                      "h-8 w-8 rounded-lg transition-colors",
+                      isRecording
+                        ? "text-red-500 bg-red-50 hover:bg-red-100"
+                        : isDarkMode ? "text-slate-400 hover:bg-slate-700 hover:text-slate-200" : "text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                    )}
+                    aria-label={isRecording ? "Stop recording" : "Voice message"}
+                  >
+                    <Mic size={15} className={isRecording ? "animate-pulse" : ""} />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{isRecording ? "Stop recording" : "Voice message"}</TooltipContent>
+              </Tooltip>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost" size="icon"
+                    className={cn(
+                      "h-8 w-8 rounded-lg transition-colors",
+                      isDarkMode ? "text-slate-400 hover:bg-slate-700 hover:text-slate-200" : "text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                    )}
+                    aria-label="Add emoji"
+                  >
+                    <Smile size={15} />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Emoji</TooltipContent>
+              </Tooltip>
+
+              {/* Recording indicator */}
               {isRecording && (
-                <span className="flex items-center gap-1 text-red-500">
-                  <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+                <span className="flex items-center gap-1 text-xs text-red-500 ml-1">
+                  <div className="w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse" />
                   Recording…
                 </span>
               )}
             </div>
-            {isOverWarning && (
-              <span className={isAtLimit ? "text-destructive font-medium" : "text-orange-500"}>
-                {inputText.length}/{INPUT_LIMIT}
-              </span>
-            )}
+
+            {/* Right — model picker + char count + send */}
+            <div className="flex items-center gap-2">
+              {/* Model picker — shows current model, click to switch */}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    className={cn(
+                      "flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium transition-colors",
+                      isDarkMode
+                        ? "text-slate-400 hover:bg-slate-700 hover:text-slate-200"
+                        : "text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                    )}
+                    aria-label="Select model"
+                  >
+                    <currentModel.icon size={12} />
+                    <span>{currentModel.label}</span>
+                    <ChevronDown size={11} className="opacity-60" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  align="end"
+                  side="top"
+                  className={cn("w-52 mb-1", isDarkMode && "bg-slate-800 border-slate-700 text-slate-200")}
+                >
+                  {models.map(model => (
+                    <DropdownMenuItem
+                      key={model.name}
+                      onClick={() => handleSelectModel(model.name)}
+                      className={cn(
+                        "flex items-center gap-2 cursor-pointer",
+                        selectedModel === model.name
+                          ? isDarkMode ? "bg-slate-700" : "bg-slate-100"
+                          : isDarkMode ? "hover:bg-slate-700" : ""
+                      )}
+                    >
+                      <model.icon size={14} className={selectedModel === model.name ? "text-purple-500" : "text-slate-400"} />
+                      <span className="text-sm">{model.label}</span>
+                      {selectedModel === model.name && (
+                        <span className="ml-auto text-purple-500 text-xs">✓</span>
+                      )}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+              {isOverWarning && (
+                <span className={cn("text-xs", isAtLimit ? "text-destructive font-medium" : "text-orange-500")}>
+                  {inputText.length}/{INPUT_LIMIT}
+                </span>
+              )}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    onClick={handleSend}
+                    size="icon"
+                    disabled={!canSend}
+                    className={cn(
+                      "h-8 w-8 rounded-xl transition-all duration-150",
+                      canSend
+                        ? "bg-violet-600 hover:bg-violet-700 text-white active:scale-95"
+                        : isDarkMode
+                          ? "bg-slate-700 text-slate-500 cursor-not-allowed opacity-50"
+                          : "bg-slate-100 text-slate-400 cursor-not-allowed"
+                    )}
+                    aria-label="Send message"
+                  >
+                    <Send size={14} />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Send (Enter)</TooltipContent>
+              </Tooltip>
+            </div>
           </div>
-        </Card>
+        </div>
+
+        {/* Subtle hint */}
+        <p className={cn("text-center text-[11px] mt-1.5", isDarkMode ? "text-slate-600" : "text-slate-400")}>
+          Enter to send · Shift+Enter for new line
+        </p>
       </div>
     </div>
   );

@@ -5,6 +5,7 @@ export interface Message {
   timestamp: Date;
   starred: boolean;
   isError?: boolean;
+  isStreaming?: boolean; // true while chunks are still arriving
 }
 
 export type FilterTag = {

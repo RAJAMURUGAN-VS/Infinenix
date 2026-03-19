@@ -42,12 +42,12 @@ interface ChatFolder {
 }
 
 const AppHeader = ({ messages, onLoadChat, currentChatId, onNewChat, selectedDomain }: AppHeaderProps) => {
-  // Get active folder from localStorage
   const getActiveFolder = () => {
     return localStorage.getItem('activeFolderId') || 'default';
   };
 
   const [isLibraryOpen, setIsLibraryOpen] = useState(false);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
@@ -55,11 +55,31 @@ const AppHeader = ({ messages, onLoadChat, currentChatId, onNewChat, selectedDom
   const [foldersVersion, setFoldersVersion] = useState(0);
   const [selectedFolderId, setSelectedFolderId] = useState(getActiveFolder());
   const [currentChatFolderId, setCurrentChatFolderId] = useState<string>('default');
+  // Drag-and-drop state
+  const [dragOverFolderId, setDragOverFolderId] = useState<string | null>(null);
+  const isDragging = React.useRef(false);
   const navigate = useNavigate();
   const { isDarkMode, toggleTheme } = useTheme();
 
-  // Update currentChatFolderId when currentChatId changes
+  // Reset drag state if user aborts a drag (releases mouse outside)
   React.useEffect(() => {
+    const handleDragStart = () => {
+      isDragging.current = true;
+    };
+    const handleDragEnd = () => {
+      // Delay false so the immediate post-drag click gets ignored
+      setTimeout(() => { isDragging.current = false; }, 200);
+    };
+    window.addEventListener('appDragStart', handleDragStart);
+    window.addEventListener('dragend', handleDragEnd);
+    return () => {
+      window.removeEventListener('appDragStart', handleDragStart);
+      window.removeEventListener('dragend', handleDragEnd);
+    };
+  }, []);
+
+  React.useEffect(() => {
+    setIsHistoryOpen(false); // Close modal when navigating between chats
     if (currentChatId) {
       const chatData = localStorage.getItem(`chat_${currentChatId}`);
       if (chatData) {
@@ -73,11 +93,9 @@ const AppHeader = ({ messages, onLoadChat, currentChatId, onNewChat, selectedDom
     }
   }, [currentChatId]);
 
-  // Get folders and organize chats
   const { folders, unorganizedChats } = useMemo(() => {
     const savedFolders = JSON.parse(localStorage.getItem('chatFolders') || '[]') as ChatFolder[];
-    
-    // Ensure default folder exists
+
     const defaultFolder: ChatFolder = {
       id: 'default',
       name: 'General',
@@ -85,7 +103,6 @@ const AppHeader = ({ messages, onLoadChat, currentChatId, onNewChat, selectedDom
       createdAt: new Date().toISOString()
     };
 
-    // Get all chats from localStorage
     const allChats: { id: string; messages: Message[]; folderId?: string }[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
@@ -95,38 +112,26 @@ const AppHeader = ({ messages, onLoadChat, currentChatId, onNewChat, selectedDom
         if (chatData) {
           const parsedData = JSON.parse(chatData);
           if (parsedData.messages && Array.isArray(parsedData.messages)) {
-            allChats.push({
-              id: chatId,
-              messages: parsedData.messages,
-              folderId: parsedData.folderId || 'default'
-            });
+            allChats.push({ id: chatId, messages: parsedData.messages, folderId: parsedData.folderId || 'default' });
           } else {
-            allChats.push({
-              id: chatId,
-              messages: parsedData,
-              folderId: 'default'
-            });
+            allChats.push({ id: chatId, messages: parsedData, folderId: 'default' });
           }
         }
       }
     }
 
-    // Organize chats into folders
     const foldersMap = new Map<string, ChatFolder>();
     foldersMap.set('default', defaultFolder);
-    
     savedFolders.forEach(folder => {
       foldersMap.set(folder.id, { ...folder, chats: [] });
     });
 
-    // Sort chats by timestamp
     allChats.sort((a, b) => {
       const aTime = new Date(a.messages[0]?.timestamp || 0).getTime();
       const bTime = new Date(b.messages[0]?.timestamp || 0).getTime();
       return bTime - aTime;
     });
 
-    // Assign chats to folders
     allChats.forEach(chat => {
       const folderId = chat.folderId || 'default';
       const folder = foldersMap.get(folderId);
@@ -135,10 +140,7 @@ const AppHeader = ({ messages, onLoadChat, currentChatId, onNewChat, selectedDom
       }
     });
 
-    return {
-      folders: Array.from(foldersMap.values()),
-      unorganizedChats: []
-    };
+    return { folders: Array.from(foldersMap.values()), unorganizedChats: [] };
   }, [messages, selectedFolderId, foldersVersion]);
 
   const handleCreateFolder = () => {
@@ -149,11 +151,9 @@ const AppHeader = ({ messages, onLoadChat, currentChatId, onNewChat, selectedDom
         chats: [],
         createdAt: new Date().toISOString()
       };
-
       const savedFolders = JSON.parse(localStorage.getItem('chatFolders') || '[]');
       savedFolders.push(newFolder);
       localStorage.setItem('chatFolders', JSON.stringify(savedFolders));
-
       setNewFolderName("");
       setIsCreatingFolder(false);
       setFoldersVersion(v => v + 1);
@@ -175,23 +175,16 @@ const AppHeader = ({ messages, onLoadChat, currentChatId, onNewChat, selectedDom
 
   const handleDeleteFolder = (folderId: string) => {
     if (folderId === 'default') return;
-
-    // Move all chats from deleted folder to default
     const folder = folders.find(f => f.id === folderId);
     if (folder) {
       folder.chats.forEach(chat => {
-        const chatData = {
-          messages: chat.messages,
-          folderId: 'default'
-        };
+        const chatData = { messages: chat.messages, folderId: 'default' };
         localStorage.setItem(`chat_${chat.id}`, JSON.stringify(chatData));
       });
     }
-
     const savedFolders = JSON.parse(localStorage.getItem('chatFolders') || '[]');
     const updatedFolders = savedFolders.filter((folder: ChatFolder) => folder.id !== folderId);
     localStorage.setItem('chatFolders', JSON.stringify(updatedFolders));
-
     if (selectedFolderId === folderId) {
       setSelectedFolderId('default');
       localStorage.setItem('activeFolderId', 'default');
@@ -203,17 +196,63 @@ const AppHeader = ({ messages, onLoadChat, currentChatId, onNewChat, selectedDom
     setSelectedFolderId(folderId);
   };
 
+  // ── Drag-and-drop helpers ──
+  const handleChatDragStart = (e: React.DragEvent, chatId: string) => {
+    e.dataTransfer.setData('chatId', chatId);
+    e.dataTransfer.effectAllowed = 'move';
+    isDragging.current = true;
+    window.dispatchEvent(new Event('appDragStart'));
+  };
+
+  const handleFolderDragOver = (e: React.DragEvent, folderId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'move';
+    setDragOverFolderId(folderId);
+  };
+
+  const handleFolderDragLeave = () => {
+    setDragOverFolderId(null);
+  };
+
+  const handleFolderDrop = (e: React.DragEvent, targetFolderId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const chatId = e.dataTransfer.getData('chatId');
+    if (chatId) {
+      // Move the chat to the target folder
+      const raw = localStorage.getItem(`chat_${chatId}`);
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          const updatedData = { messages: parsed.messages ?? parsed, folderId: targetFolderId };
+          localStorage.setItem(`chat_${chatId}`, JSON.stringify(updatedData));
+          // Notify other components (e.g. Sidebar) via storage event
+          window.dispatchEvent(new StorageEvent('storage', { key: `chat_${chatId}` }));
+          setFoldersVersion(v => v + 1);
+        } catch { /**/ }
+      }
+    }
+    setDragOverFolderId(null);
+    isDragging.current = false;
+    // Don't auto-close; let user see result
+  };
+
   const handleLoadChat = (chatId: string) => {
-    // Save current chat before loading new one
+    // If a drag literally just finished, ignore the click so we don't accidentally navigate
+    if (isDragging.current) return;
+
     if (messages.length > 0 && currentChatId && currentChatId !== chatId) {
-      const chatData = {
-        messages: messages,
-        folderId: currentChatFolderId
-      };
+      const raw = localStorage.getItem(`chat_${currentChatId}`);
+      let chatData: any = { messages: messages, folderId: currentChatFolderId };
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          chatData = { ...parsed, messages: messages, folderId: currentChatFolderId };
+        } catch { /**/ }
+      }
       localStorage.setItem(`chat_${currentChatId}`, JSON.stringify(chatData));
     }
-    
-    // Update the selected folder to match the loaded chat's folder
     const chatData = localStorage.getItem(`chat_${chatId}`);
     if (chatData) {
       try {
@@ -225,29 +264,27 @@ const AppHeader = ({ messages, onLoadChat, currentChatId, onNewChat, selectedDom
         setCurrentChatFolderId('default');
       }
     }
-    
     onLoadChat(chatId);
   };
 
   const handleNewChat = () => {
-    // Save current chat to its original folder if it has messages
     if (messages.length > 0 && currentChatId) {
-      const chatData = {
-        messages: messages,
-        folderId: currentChatFolderId
-      };
+      const raw = localStorage.getItem(`chat_${currentChatId}`);
+      let chatData: any = { messages: messages, folderId: currentChatFolderId };
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          chatData = { ...parsed, messages: messages, folderId: currentChatFolderId };
+        } catch { /**/ }
+      }
       localStorage.setItem(`chat_${currentChatId}`, JSON.stringify(chatData));
     }
-    
-    // Set the active folder for new chats
     setCurrentChatFolderId(selectedFolderId);
     localStorage.setItem('newChatFolderId', selectedFolderId);
-    
-    // Call the original onNewChat
     onNewChat();
   };
 
-  const steps: StepType[]  = [
+  const steps: StepType[] = [
     {
       selector: '[data-tour-element="chracter-showcase-button"]',
       content: 'Explore the character showcase. Click to view available characters.',
@@ -276,14 +313,11 @@ const AppHeader = ({ messages, onLoadChat, currentChatId, onNewChat, selectedDom
 
   return (
     <TourProvider steps={steps} styles={{
-      maskArea: (base) => ({
-        ...base,
-        rx: 8, // Rounded corners for highlight
-      }),
+      maskArea: (base) => ({ ...base, rx: 8 }),
       popover: (base) => ({
         ...base,
-        backgroundColor: '#1e293b', // Dark background
-        color: 'white',             // Text color
+        backgroundColor: '#1e293b',
+        color: 'white',
         padding: '20px',
         margin: '13px',
         borderRadius: '12px',
@@ -291,26 +325,22 @@ const AppHeader = ({ messages, onLoadChat, currentChatId, onNewChat, selectedDom
         fontSize: '16px',
         boxShadow: '0 10px 30px rgba(0,0,0,0.3)',
       }),
-      badge: (base) => ({
-        ...base,
-        backgroundColor: '#9333ea', // Purple badge
-        color: 'white',
-      }),
-      close: (base) => ({
-        ...base,
-        color: 'white',
-      }),
+      badge: (base) => ({ ...base, backgroundColor: '#9333ea', color: 'white' }),
+      close: (base) => ({ ...base, color: 'white' }),
     }}>
-      <header className="fixed top-0 left-0 w-full flex justify-between items-center px-6 py-4 border-b border-border/40 bg-background/80 backdrop-blur-md shadow-sm transition-colors duration-200">
-        {/* Left - Brand */}
+      {/* FIX 11: removed backdrop-blur-md shadow-sm, kept border */}
+      <header className="fixed top-0 left-0 w-full z-50 flex justify-between items-center px-6 py-4 border-b border-border/40 bg-background transition-colors duration-200">
+        {/* Left — Brand */}
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-3">
-            <div className="bg-gradient-to-r from-blue-600 to-purple-600 p-2.5 rounded-xl flex items-center justify-center text-white shadow-lg">
+            {/* FIX 1: flat violet, no shadow */}
+            <div className="bg-violet-600 p-2.5 rounded-xl flex items-center justify-center text-white">
               <MessageSquare size={20} />
             </div>
             <div className="hidden sm:block">
-              <h1 className="text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-                Infinenix
+              {/* FIX 2: plain text, corrected spelling */}
+              <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-100">
+                Infenix
               </h1>
               <p className="text-xs text-muted-foreground">Intelligent Assistant</p>
             </div>
@@ -319,35 +349,56 @@ const AppHeader = ({ messages, onLoadChat, currentChatId, onNewChat, selectedDom
 
         <StartTourButton />
 
-        {/* Center - Navigation */}
+        {/* Center — Navigation */}
         <div className="flex items-center gap-2">
-          <DropdownMenu onOpenChange={(open) => {
-            if (!open) {
-              setSelectedFolderId(currentChatFolderId);
-            }
-          }}>
+          <DropdownMenu
+            open={isHistoryOpen}
+            onOpenChange={(open) => {
+              setIsHistoryOpen(open);
+              if (!open) setSelectedFolderId(currentChatFolderId);
+            }}
+          >
             <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
                 size="sm"
                 className="flex items-center gap-2 px-4"
                 data-tour-element="history-button"
+                // Auto-open when a sidebar chat is dragged over this button
+                onDragEnter={() => {
+                  isDragging.current = true;
+                  setIsHistoryOpen(true);
+                }}
               >
-                <History size={16} />
-                <span className="hidden sm:inline">History</span>
+                <Folder size={16} />
+                <span className="hidden sm:inline">Folders</span>
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="center" className="w-[380px] p-0">
-              <div className="flex items-center justify-between p-4 border-b bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-950/50 dark:to-purple-950/50">
-                <h3 className="font-semibold text-base">Chat History</h3>
-                <Button 
-                  variant="outline" 
-                  size="sm" 
-                  onClick={handleNewChat}
-                  className="bg-white dark:bg-gray-800 hover:bg-blue-50 dark:hover:bg-blue-900/50 transition-colors"
-                >
-                  New Chat
-                </Button>
+            <DropdownMenuContent
+              align="center"
+              className="w-[380px] p-0"
+              onInteractOutside={(e) => {
+                const target = e.target as HTMLElement;
+                if (!target || !target.closest) return;
+
+                // If a drag is anywhere in progress, absolutely do not close
+                if (isDragging.current) {
+                  e.preventDefault();
+                } 
+                // If pressing down on a draggable item anywhere (like the sidebar), 
+                // keep open until we know if it's a real drag or just a click.
+                else if (
+                  target.closest('.sidebar-chat-item') || 
+                  target.closest('[draggable]')
+                ) {
+                  e.preventDefault();
+                }
+              }}
+              onCloseAutoFocus={e => e.preventDefault()}
+            >
+              {/* FIX 3: flat violet-50 header */}
+              <div className="flex items-center justify-between p-4 border-b bg-violet-50 dark:bg-violet-950/30">
+                <h3 className="font-semibold text-base">Folders</h3>
               </div>
 
               {/* Folder Management */}
@@ -358,13 +409,12 @@ const AppHeader = ({ messages, onLoadChat, currentChatId, onNewChat, selectedDom
                     variant="ghost"
                     size="sm"
                     onClick={() => setIsCreatingFolder(true)}
-                    className="h-7 w-7 p-0 hover:bg-blue-100 dark:hover:bg-blue-900/50 rounded-full transition-colors"
+                    className="h-7 w-7 p-0 hover:bg-violet-100 dark:hover:bg-violet-900/50 rounded-full transition-colors"
                   >
                     <Plus size={14} />
                   </Button>
                 </div>
 
-                {/* Create new folder input */}
                 {isCreatingFolder && (
                   <div className="flex items-center gap-2 mb-3 p-2 bg-gray-50 dark:bg-gray-800/50 rounded-lg">
                     <Input
@@ -374,61 +424,44 @@ const AppHeader = ({ messages, onLoadChat, currentChatId, onNewChat, selectedDom
                       className="h-8 text-sm bg-white dark:bg-gray-800"
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') handleCreateFolder();
-                        if (e.key === 'Escape') {
-                          setIsCreatingFolder(false);
-                          setNewFolderName("");
-                        }
+                        if (e.key === 'Escape') { setIsCreatingFolder(false); setNewFolderName(""); }
                       }}
                       autoFocus
                     />
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 w-8 p-0 hover:bg-green-100 dark:hover:bg-green-900/50 rounded-full transition-colors"
-                      onClick={handleCreateFolder}
-                    >
+                    <Button variant="ghost" size="sm" className="h-8 w-8 p-0 hover:bg-green-100 dark:hover:bg-green-900/50 rounded-full transition-colors" onClick={handleCreateFolder}>
                       <Check size={14} className="text-green-600" />
                     </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 w-8 p-0 hover:bg-red-100 dark:hover:bg-red-900/50 rounded-full transition-colors"
-                      onClick={() => {
-                        setIsCreatingFolder(false);
-                        setNewFolderName("");
-                      }}
-                    >
+                    <Button variant="ghost" size="sm" className="h-8 w-8 p-0 hover:bg-red-100 dark:hover:bg-red-900/50 rounded-full transition-colors" onClick={() => { setIsCreatingFolder(false); setNewFolderName(""); }}>
                       <X size={14} className="text-red-600" />
                     </Button>
                   </div>
                 )}
 
-                {/* Folder List */}
                 <div className="space-y-1.5 max-h-[140px] overflow-y-auto pr-1">
                   {folders.map((folder) => (
                     <div
                       key={folder.id}
                       className={cn(
                         "flex items-center justify-between p-2.5 rounded-lg cursor-pointer transition-all duration-200 group",
-                        selectedFolderId === folder.id
-                          ? "bg-gradient-to-r from-blue-500/10 to-purple-500/10 border border-blue-200 dark:border-blue-800 shadow-sm"
-                          : "hover:bg-gray-100 dark:hover:bg-gray-800/50"
+                        dragOverFolderId === folder.id
+                          ? "bg-violet-100 dark:bg-violet-900/40 ring-2 ring-violet-400 dark:ring-violet-500 scale-[1.01]"
+                          : selectedFolderId === folder.id
+                            ? "bg-violet-50 dark:bg-violet-900/20 border border-violet-200 dark:border-violet-800"
+                            : "hover:bg-gray-100 dark:hover:bg-gray-800/50"
                       )}
                       onClick={() => handleSelectFolder(folder.id)}
+                      onDragOver={e => handleFolderDragOver(e, folder.id)}
+                      onDragLeave={handleFolderDragLeave}
+                      onDrop={e => handleFolderDrop(e, folder.id)}
                     >
                       <div className="flex items-center gap-2.5">
                         {selectedFolderId === folder.id ? (
-                          <FolderOpen 
-                            size={16} 
-                            className={cn(
-                              "text-blue-600 dark:text-blue-400 drop-shadow-sm",
-                              selectedFolderId === folder.id && "animate-pulse"
-                            )}
-                          />
+                          // FIX 6: no drop-shadow, no animate-pulse
+                          <FolderOpen size={16} className="text-violet-600 dark:text-violet-400" />
                         ) : (
                           <Folder size={16} className="text-muted-foreground" />
                         )}
-                        
+
                         {editingFolderId === folder.id ? (
                           <Input
                             value={editingFolderName}
@@ -436,24 +469,20 @@ const AppHeader = ({ messages, onLoadChat, currentChatId, onNewChat, selectedDom
                             className="h-7 text-sm w-32 bg-white dark:bg-gray-800"
                             onKeyDown={(e) => {
                               if (e.key === 'Enter') handleEditFolder(folder.id, editingFolderName);
-                              if (e.key === 'Escape') {
-                                setEditingFolderId(null);
-                                setEditingFolderName("");
-                              }
+                              if (e.key === 'Escape') { setEditingFolderId(null); setEditingFolderName(""); }
                             }}
                             autoFocus
                           />
                         ) : (
-                          <span 
-                            className={cn(
-                              "text-sm font-medium",
-                              selectedFolderId === folder.id ? "text-blue-700 dark:text-blue-400 font-semibold" : "text-foreground"
-                            )}
-                          >
+                          <span className={cn(
+                            "text-sm font-medium",
+                            // FIX 5: violet text
+                            selectedFolderId === folder.id ? "text-violet-700 dark:text-violet-400 font-semibold" : "text-foreground"
+                          )}>
                             {folder.name}
                           </span>
                         )}
-                        
+
                         <Badge variant="secondary" className="h-5 px-1.5 text-xs font-medium">
                           {folder.chats.length}
                         </Badge>
@@ -463,53 +492,23 @@ const AppHeader = ({ messages, onLoadChat, currentChatId, onNewChat, selectedDom
                         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                           {editingFolderId === folder.id ? (
                             <>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-6 w-6 p-0 hover:bg-green-100 dark:hover:bg-green-900/50 rounded-full transition-colors"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleEditFolder(folder.id, editingFolderName);
-                                }}
-                              >
+                              <Button variant="ghost" size="sm" className="h-6 w-6 p-0 hover:bg-green-100 dark:hover:bg-green-900/50 rounded-full transition-colors"
+                                onClick={(e) => { e.stopPropagation(); handleEditFolder(folder.id, editingFolderName); }}>
                                 <Check size={12} className="text-green-600" />
                               </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-6 w-6 p-0 hover:bg-red-100 dark:hover:bg-red-900/50 rounded-full transition-colors"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setEditingFolderId(null);
-                                  setEditingFolderName("");
-                                }}
-                              >
+                              <Button variant="ghost" size="sm" className="h-6 w-6 p-0 hover:bg-red-100 dark:hover:bg-red-900/50 rounded-full transition-colors"
+                                onClick={(e) => { e.stopPropagation(); setEditingFolderId(null); setEditingFolderName(""); }}>
                                 <X size={12} className="text-red-600" />
                               </Button>
                             </>
                           ) : (
                             <>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-6 w-6 p-0 hover:bg-blue-100 dark:hover:bg-blue-900/50 rounded-full transition-colors"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setEditingFolderId(folder.id);
-                                  setEditingFolderName(folder.name);
-                                }}
-                              >
-                                <Edit3 size={12} className="text-blue-600" />
+                              <Button variant="ghost" size="sm" className="h-6 w-6 p-0 hover:bg-violet-100 dark:hover:bg-violet-900/50 rounded-full transition-colors"
+                                onClick={(e) => { e.stopPropagation(); setEditingFolderId(folder.id); setEditingFolderName(folder.name); }}>
+                                <Edit3 size={12} className="text-violet-600" />
                               </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-6 w-6 p-0 hover:bg-red-100 dark:hover:bg-red-900/50 rounded-full transition-colors"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleDeleteFolder(folder.id);
-                                }}
-                              >
+                              <Button variant="ghost" size="sm" className="h-6 w-6 p-0 hover:bg-red-100 dark:hover:bg-red-900/50 rounded-full transition-colors"
+                                onClick={(e) => { e.stopPropagation(); handleDeleteFolder(folder.id); }}>
                                 <X size={12} className="text-red-600" />
                               </Button>
                             </>
@@ -529,7 +528,7 @@ const AppHeader = ({ messages, onLoadChat, currentChatId, onNewChat, selectedDom
                       {folders.find(f => f.id === selectedFolderId)?.name || 'General'} Chats
                     </span>
                   </div>
-                  
+
                   {folders.find(f => f.id === selectedFolderId)?.chats.length === 0 ? (
                     <div className="text-center py-6 text-sm text-muted-foreground bg-gray-50 dark:bg-gray-800/50 rounded-lg">
                       No chats in this folder
@@ -540,30 +539,33 @@ const AppHeader = ({ messages, onLoadChat, currentChatId, onNewChat, selectedDom
                         const firstMessage = chat.messages[0];
                         const lastMessage = chat.messages[chat.messages.length - 1];
                         return (
-                          <DropdownMenuItem
+                          <div
                             key={chat.id}
+                            draggable
+                            onDragStart={e => handleChatDragStart(e, chat.id)}
+                            onDragEnd={() => { setDragOverFolderId(null); }}
                             className={cn(
-                              "flex flex-col items-start p-3 cursor-pointer rounded-lg",
-                              currentChatId === chat.id 
-                                ? "bg-blue-50 dark:bg-blue-900/20" 
-                                : "hover:bg-gray-100 dark:hover:bg-gray-800/50"
+                              "flex flex-col items-start p-3 cursor-grab active:cursor-grabbing rounded-lg select-none transition-colors",
+                              currentChatId === chat.id
+                                ? "bg-violet-50 dark:bg-violet-900/20"
+                                : "hover:bg-slate-100 dark:hover:bg-slate-800/50"
                             )}
                             onClick={() => handleLoadChat(chat.id)}
                           >
                             <div className="flex items-center gap-2 w-full">
-                              <MessageSquare size={14} className="text-muted-foreground" />
+                              <MessageSquare size={14} className="text-muted-foreground flex-shrink-0" />
                               <span className="text-sm font-medium line-clamp-1">
-                                {firstMessage?.content.length > 30 
-                                  ? firstMessage.content.substring(0, 30) + '...' 
+                                {firstMessage?.content.length > 30
+                                  ? firstMessage.content.substring(0, 30) + '...'
                                   : firstMessage?.content || 'New Chat'}
                               </span>
                             </div>
                             <span className="text-xs text-muted-foreground ml-6 mt-0.5">
-                              {lastMessage?.timestamp 
+                              {lastMessage?.timestamp
                                 ? new Date(lastMessage.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                                 : 'No messages'}
                             </span>
-                          </DropdownMenuItem>
+                          </div>
                         );
                       })}
                     </div>
@@ -584,28 +586,29 @@ const AppHeader = ({ messages, onLoadChat, currentChatId, onNewChat, selectedDom
             <span className="hidden sm:inline">Library</span>
           </Button>
 
-          {/* Modified Domain Display Button */}
+          {/* FIX 8: Domain display button — flat violet */}
           {selectedDomain ? (
             <Button
               variant="ghost"
               size="sm"
               onClick={() => navigate("/")}
-              className="flex items-center gap-2 px-4 bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-900/20 dark:to-purple-900/20 border border-blue-200/50 dark:border-blue-800/50 hover:from-blue-100 hover:to-purple-100 dark:hover:from-blue-900/30 dark:hover:to-purple-900/30 transition-all duration-200"
+              className="flex items-center gap-2 px-4 bg-violet-50 dark:bg-violet-900/20 border border-violet-200/60 dark:border-violet-800/50 hover:bg-violet-100 dark:hover:bg-violet-900/30 transition-colors"
             >
-              <ArrowLeft size={14} className="text-blue-600 dark:text-blue-400" />
+              <ArrowLeft size={14} className="text-violet-600 dark:text-violet-400" />
               <div className="flex items-center gap-2">
                 {selectedDomain.icon}
-                <span className="text-sm font-medium text-blue-700 dark:text-blue-300">
+                <span className="text-sm font-medium text-violet-700 dark:text-violet-300">
                   {selectedDomain.label}
                 </span>
               </div>
             </Button>
           ) : (
+            // FIX 9: hover violet
             <Button
               variant="ghost"
               size="sm"
               onClick={() => navigate("/DomainSelector")}
-              className="flex items-center gap-2 px-4 hover:bg-blue-50 dark:hover:bg-blue-900/50 transition-colors"
+              className="flex items-center gap-2 px-4 hover:bg-violet-50 dark:hover:bg-violet-900/50 transition-colors"
             >
               <ArrowLeft size={14} />
               <span className="hidden sm:inline">Select Domain</span>
@@ -613,14 +616,9 @@ const AppHeader = ({ messages, onLoadChat, currentChatId, onNewChat, selectedDom
           )}
         </div>
 
-        {/* Right - User Actions */}
+        {/* Right — User Actions */}
         <div className="flex items-center gap-3">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={toggleTheme}
-            className="h-9 w-9"
-          >
+          <Button variant="ghost" size="icon" onClick={toggleTheme} className="h-9 w-9">
             {isDarkMode ? (
               <Sun className="h-5 w-5 text-yellow-500" />
             ) : (
@@ -628,29 +626,31 @@ const AppHeader = ({ messages, onLoadChat, currentChatId, onNewChat, selectedDom
             )}
           </Button>
 
-          <Button 
-            variant="ghost" 
-            size="icon" 
+          <Button
+            variant="ghost"
+            size="icon"
             className="h-10 w-10 p-0 [&_svg]:!size-8"
             onClick={() => navigate("/DomainSelector")}
           >
             <Cube3DIcon />
           </Button>
 
-          <div className="bg-gradient-to-r from-emerald-500 to-blue-500 rounded-full w-9 h-9 flex items-center justify-center text-white cursor-pointer shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105" 
-          data-tour-element="chracter-showcase-button"
-          onClick={() => navigate("/CharacterShowcase")}
+          {/* FIX 10: flat violet button with User icon instead of robot emoji */}
+          <button
+            className="w-9 h-9 rounded-full bg-violet-600 flex items-center justify-center text-white hover:bg-violet-700 transition-colors cursor-pointer"
+            onClick={() => navigate("/CharacterShowcase")}
+            data-tour-element="chracter-showcase-button"
+            aria-label="Character showcase"
           >
-            🤖
-          </div>
+            <User size={16} />
+          </button>
         </div>
       </header>
 
-      <LibraryModal 
-        isOpen={isLibraryOpen} 
-        onClose={() => setIsLibraryOpen(false)} 
+      <LibraryModal
+        isOpen={isLibraryOpen}
+        onClose={() => setIsLibraryOpen(false)}
       />
-      
     </TourProvider>
   );
 };

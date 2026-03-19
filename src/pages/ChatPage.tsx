@@ -1,5 +1,4 @@
-// pages/ChatPage.tsx
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import AppHeader from "@/components/AppHeader";
 import Sidebar from "@/components/Sidebar";
 import ChatArea from "@/components/ChatArea";
@@ -24,13 +23,13 @@ export default function ChatPage() {
     handleNewChat,
     loadChat,
     deleteChat,
+    moveChatToFolder,
     currentChatId,
     starredMessages,
     currentlyPlaying,
     getChatHistories,
   } = useChatLogic();
 
-  // Load selected domain from location state
   useEffect(() => {
     if (location.state?.domain) {
       setSelectedDomain({
@@ -42,28 +41,35 @@ export default function ChatPage() {
     }
   }, [location.state]);
 
-  // Initial load auto-reload: Every single time the user visits the page, do a hard reload exactly once.
+  // Reload once on first visit so the browser fully calculates the scroll
+  // container height. requestAnimationFrame defers until after first paint
+  // so the page renders visually before the reload fires — no blank flash.
+  const didReload = useRef(false);
   useEffect(() => {
-    const isReloading = sessionStorage.getItem('isReloadingChat');
-    if (!isReloading) {
-      // First time visiting or entering this session: set flag and force hard reload
-      sessionStorage.setItem('isReloadingChat', 'true');
-      window.location.reload();
+    if (didReload.current) return;
+    didReload.current = true;
+    const KEY = "infenix_chat_reloaded";
+    if (!sessionStorage.getItem(KEY)) {
+      sessionStorage.setItem(KEY, "1");
+      requestAnimationFrame(() => window.location.reload());
     } else {
-      // We just hard reloaded. Clear the flag so the NEXT time they visit, it will hard reload again.
-      sessionStorage.removeItem('isReloadingChat');
+      sessionStorage.removeItem(KEY);
     }
   }, []);
 
-  // Fill textarea when a suggestion chip is clicked (no auto-send)
   const handleChipClick = useCallback((text: string) => {
     setInputText(text);
   }, []);
 
   const chatHistories = getChatHistories();
 
+  // Sidebar width — must match Sidebar's w-72 (288px) / w-16 (64px)
+  const sidebarWidth = isSidebarOpen ? 288 : 64;
+
   return (
-    <div className="flex flex-col h-screen min-h-0 bg-background">
+    <div className="h-screen overflow-hidden bg-background">
+
+      {/* Fixed header — z-50 always on top */}
       <AppHeader
         messages={messages}
         onLoadChat={loadChat}
@@ -72,7 +78,11 @@ export default function ChatPage() {
         selectedDomain={selectedDomain}
       />
 
-      <div className="flex flex-row flex-1 min-h-0 pt-20">
+      {/* Fixed sidebar — below header, z-40 */}
+      <div
+        className="fixed left-0 top-[65px] bottom-0 z-40 transition-all duration-300"
+        style={{ width: sidebarWidth }}
+      >
         <Sidebar
           isOpen={isSidebarOpen}
           toggleSidebar={() => setIsSidebarOpen((v) => !v)}
@@ -85,35 +95,42 @@ export default function ChatPage() {
           currentChatId={currentChatId}
           onLoadChat={loadChat}
           onDeleteChat={deleteChat}
+          onMoveChatToFolder={moveChatToFolder}
         />
+      </div>
 
-        <div className="flex-1 flex flex-col min-h-0">
-          {/* key={currentChatId} remounts ChatArea on chat switch → triggers fade-in animation */}
-          <div
-            key={currentChatId}
-            className="flex-grow overflow-y-auto min-h-0 animate-in fade-in duration-200"
-          >
-            <ChatArea
-              messages={messages}
-              isLoading={isLoading}
-              chatLoading={chatLoading}
-              onToggleStar={toggleStarMessage}
-              onPlayMessage={handleTextToSpeech}
-              currentlyPlaying={currentlyPlaying}
-              onRetry={handleRetry}
-              onChipClick={handleChipClick}
-              selectedDomain={selectedDomain}
-              onPromptClick={handleChipClick}
-            />
-          </div>
-
-          <MessageInput
-            onSendMessage={handleSendMessage}
-            inputText={inputText}
-            setInputText={setInputText}
-            disabled={isLoading}
+      {/* Main column — pushed right of sidebar, below header */}
+      <div
+        className="flex flex-col h-screen pt-[65px] overflow-hidden transition-all duration-300"
+        style={{ marginLeft: sidebarWidth }}
+      >
+        {/* THE scroll container — only element that scrolls */}
+        <div
+          key={currentChatId}
+          id="chat-scroll-container"
+          className="flex-1 min-h-0 overflow-y-auto"
+        >
+          <ChatArea
+            messages={messages}
+            isLoading={isLoading}
+            chatLoading={chatLoading}
+            onToggleStar={toggleStarMessage}
+            onPlayMessage={handleTextToSpeech}
+            currentlyPlaying={currentlyPlaying}
+            onRetry={handleRetry}
+            onChipClick={handleChipClick}
+            selectedDomain={selectedDomain}
+            onPromptClick={handleChipClick}
           />
         </div>
+
+        {/* Input bar — natural bottom of flex column */}
+        <MessageInput
+          onSendMessage={handleSendMessage}
+          inputText={inputText}
+          setInputText={setInputText}
+          disabled={isLoading}
+        />
       </div>
     </div>
   );
