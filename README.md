@@ -1,0 +1,2 @@
+# infinix
+Infinix is an advanced conversational AI application designed to provide intelligent, context-aware interactions. It features a robust Python (FastAPI) backend for sophisticated natural language understanding and intent processing, paired with a modern React and TypeScript frontend for a seamless, responsive chat experience. InfinIA excels with its dynamic persona adaptation, domain-specific knowledge capabilities, and rich multimedia integration.
