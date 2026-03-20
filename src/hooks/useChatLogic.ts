@@ -23,6 +23,82 @@ export interface ParsedAIResponse {
   code: string;
 }
 
+const escapeHtml = (text: string): string =>
+  text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
+const buildFallbackToolHtml = (responseText: string): string => {
+  const lines = responseText
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 12);
+
+  const items = lines
+    .map((line) => `<li>${escapeHtml(line)}</li>`)
+    .join("");
+
+  return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Study Tool</title>
+    <style>
+      :root { color-scheme: light; }
+      body {
+        margin: 0;
+        font-family: "Segoe UI", Arial, sans-serif;
+        background: linear-gradient(140deg, #f8fafc, #eef2ff 55%, #e0f2fe);
+        color: #0f172a;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+      }
+      .card {
+        width: min(860px, 100%);
+        background: rgba(255, 255, 255, 0.9);
+        border: 1px solid #dbeafe;
+        border-radius: 16px;
+        box-shadow: 0 14px 40px rgba(15, 23, 42, 0.08);
+        overflow: hidden;
+      }
+      .head {
+        background: linear-gradient(120deg, #2563eb, #0ea5e9);
+        color: white;
+        padding: 16px 20px;
+        font-weight: 700;
+      }
+      .content {
+        padding: 18px 22px 22px;
+      }
+      ul {
+        margin: 0;
+        padding-left: 18px;
+        display: grid;
+        gap: 10px;
+      }
+      li {
+        line-height: 1.45;
+      }
+    </style>
+  </head>
+  <body>
+    <section class="card">
+      <div class="head">Interactive Learning Card</div>
+      <div class="content">
+        <ul>${items || "<li>Use the response panel above for details.</li>"}</ul>
+      </div>
+    </section>
+  </body>
+</html>`;
+};
+
 const looksLikeTaskPrompt = (text: string): boolean => {
   const normalized = text.toLowerCase();
   const taskSignals = [
@@ -233,13 +309,16 @@ export const useChatLogic = () => {
 
       let systemPrompt: string;
       let shouldShowIntentToast = false;
+      let expectsToolCanvas = false;
 
       if (intent.matched_intention && intent.confidence >= threshold) {
         systemPrompt = PromptService.createOptimizedSystemPrompt(intent);
         shouldShowIntentToast = true;
+        expectsToolCanvas = true;
       } else if (looksLikeTaskPrompt(content)) {
         // Local keyword classifier may miss many valid task prompts; still request structured JSON/code.
         systemPrompt = PromptService.createOptimizedSystemPrompt(intent);
+        expectsToolCanvas = true;
       } else {
         systemPrompt = PromptService.createCasualSystemPrompt(characterData);
       }
@@ -261,9 +340,13 @@ export const useChatLogic = () => {
 
       // Stream complete — parse for code blocks, clear streaming flag
       const aiParsed = parseAIResponse(fullText);
+      const fallbackCode = expectsToolCanvas && !aiParsed.code
+        ? buildFallbackToolHtml(aiParsed.response || fullText)
+        : "";
+      const finalCode = aiParsed.code || fallbackCode;
       const finalContent =
         aiParsed.response +
-        (aiParsed.code ? `\n\n### Render Code Below ###\n${aiParsed.code}` : "");
+        (finalCode ? `\n\n### Render Code Below ###\n${finalCode}` : "");
 
       setMessages(prev =>
         prev.map(m =>
