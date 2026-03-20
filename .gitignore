@@ -8,10 +8,19 @@ pnpm-debug.log*
 lerna-debug.log*
 .env
 .env.*
+.envrc
 node_modules
 dist
 dist-ssr
 *.local
+coverage
+.nyc_output
+*.tsbuildinfo
+.cache
+tmp
+temp
+*.tmp
+*.bak
 
 # Editor directories and files
 .vscode/*
@@ -24,10 +33,25 @@ dist-ssr
 *.sln
 *.sw?
 workspace.code-workspace
+
 # Python cache files
 __pycache__/
 *.py[cod]
 *$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+ENV/
+env/
+
+# Python runtime artifacts
+*.sqlite3
 
 # Local Netlify folder
 .netlify
+
+# Local deployment folders
+.vercel

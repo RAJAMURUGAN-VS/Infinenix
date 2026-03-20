@@ -2,6 +2,16 @@ import type { Handler, HandlerEvent } from "@netlify/functions";
 
 const PERPLEXITY_API_URL = "https://api.perplexity.ai/chat/completions";
 
+const getServerToken = (): string | null => {
+  const token =
+    process.env.SONAR_API_TOKEN ||
+    process.env.PERPLEXITY_API_KEY ||
+    process.env.PERPLEXITY_API_TOKEN ||
+    null;
+
+  return token && token.trim().length > 0 ? token : null;
+};
+
 const handler: Handler = async (event: HandlerEvent) => {
   // Only allow POST requests
   if (event.httpMethod !== "POST") {
@@ -11,12 +21,15 @@ const handler: Handler = async (event: HandlerEvent) => {
     };
   }
 
-  const SONAR_API_TOKEN = process.env.SONAR_API_TOKEN;
-  if (!SONAR_API_TOKEN) {
-    console.error("[sonar-proxy] SONAR_API_TOKEN is not configured");
+  const serverToken = getServerToken();
+  if (!serverToken) {
+    console.error("[sonar-proxy] Missing server token. Set SONAR_API_TOKEN or PERPLEXITY_API_KEY in Netlify site environment variables.");
     return {
       statusCode: 500,
-      body: JSON.stringify({ error: "Sonar API token is not configured on the server." }),
+      body: JSON.stringify({
+        error: "Sonar API token is not configured on the server.",
+        hint: "Set SONAR_API_TOKEN or PERPLEXITY_API_KEY in Netlify environment variables and redeploy.",
+      }),
     };
   }
 
@@ -32,7 +45,7 @@ const handler: Handler = async (event: HandlerEvent) => {
     const response = await fetch(PERPLEXITY_API_URL, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${SONAR_API_TOKEN}`,
+        Authorization: `Bearer ${serverToken}`,
         "Content-Type": "application/json",
       },
       body,

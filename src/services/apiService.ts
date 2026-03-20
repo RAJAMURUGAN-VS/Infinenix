@@ -209,7 +209,10 @@ export class ApiService {
       const errorText = await response.text().catch(() => 'Unknown error');
       if (response.status === 401) throw new Error('Sonar API authentication failed. Please check your API token.');
       if (response.status === 429) throw new Error('Rate limit exceeded. Please try again in a moment.');
-      throw new Error(`Sonar API request failed: ${response.status} ${response.statusText}`);
+      if (response.status === 500) {
+        throw new Error(`Sonar proxy server error: ${errorText}`);
+      }
+      throw new Error(`Sonar API request failed: ${response.status} ${response.statusText} - ${errorText}`);
     }
 
     const data = await response.json();
